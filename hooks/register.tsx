@@ -24,7 +24,7 @@ const BUTTON_INSET = 'xs'
 
 // Bump a tag when its type's fields change: it declines what an earlier version
 // stored, which outlives a reload.
-const cards = atom({ plugin: 'session-kanban', key: 'cards' } as const, [], { shape: 'cards-3' })
+const cards = atom({ plugin: 'session-kanban', key: 'cards' } as const, [], { shape: 'cards-4' })
 const details = atom({ plugin: 'session-kanban', key: 'details' } as const, {}, { shape: 'details-1' })
 const filter = atom({ plugin: 'session-kanban', key: 'filter' } as const, 'all')
 const isThisWeek = atom({ plugin: 'session-kanban', key: 'isThisWeek' } as const, false)
@@ -79,6 +79,9 @@ type RawSession = {
   branch?: string
   link?: string
   startedBy?: string
+  // get_session's spelling of startedBy; `detached` once moved to the top level.
+  parentSessionId?: string
+  detached?: boolean
   isRunning?: boolean
   isArchived?: boolean
   pinned?: boolean
@@ -94,10 +97,11 @@ function toCard(raw: RawSession): Card {
     groupName: raw.group?.name ?? null,
     branch: raw.branch ?? null,
     link: raw.link ?? null,
-    parentId: raw.startedBy ?? null,
+    parentId: raw.startedBy ?? (raw.detached ? null : (raw.parentSessionId ?? null)),
     isRunning: raw.isRunning === true,
     isArchived: raw.isArchived === true,
     isPinned: raw.pinned === true,
+    isCurrent: false,
     lastActivityAt: raw.lastActivityAt ? Date.parse(raw.lastActivityAt) : 0,
   }
 }
@@ -158,8 +162,24 @@ async function listSessions($: EngineInterface): Promise<{ list: Card[] } | { pr
   const recent = await fetchList($, { include_archived: true }, limit)
   const byId = new Map(active.list.map(card => [card.id, card]))
   if ('list' in recent) for (const card of recent.list) if (!byId.has(card.id)) byId.set(card.id, card)
+  const current = await currentSession($)
+  if (current) byId.set(current.id, current)
 
   return { list: [...byId.values()] }
+}
+
+// list_sessions leaves out the session that asks, which is the one this board
+// runs in; get_session answers for it as "self".
+async function currentSession($: EngineInterface): Promise<Card | null> {
+  try {
+    const text = textOf(await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' }))
+    if (!text.trimStart().startsWith('{')) return null
+    const raw = JSON.parse(text) as RawSession
+
+    return typeof raw.sessionId === 'string' ? { ...toCard(raw), isCurrent: true } : null
+  } catch {
+    return null
+  }
 }
 
 // list_sessions does not say which sessions a routine started; get_session's
@@ -537,6 +557,7 @@ export const register: Register = on => {
           </Box>
           <Box paddingLeft={inset}>
             <Text dimColor size="caption" wrap={isMultiline ? 'wrap' : 'truncate-end'}>
+              {card.isCurrent ? 'this session · ' : ''}
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>

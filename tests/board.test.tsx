@@ -1,4 +1,4 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type TestBody } from 'claude-code/testing'
 
 const NOW = Date.parse('2026-11-03T12:00:00Z')
 
@@ -25,7 +25,13 @@ const SESSIONS = [
   { sessionId: 'local_r', title: 'Nightly report', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T07:02:00Z', group: null, link: 'claude://x/local_r' },
 ]
 
-type On = Parameters<Parameters<typeof test>[1]>[1]
+// The session the board runs in: list_sessions never returns it, get_session "self" does.
+const CURRENT = { sessionId: 'local_s', title: 'Board work', branch: 'claude/board', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:55:00Z', group: null, link: 'claude://x/local_s' }
+
+type On = Parameters<TestBody>[1]
+
+// What the engine stamps on a typed /kanban.
+const RUN_KANBAN = { command: 'kanban', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } } as const
 
 function engine(on: On, listReply: string) {
   const calls: string[] = []
@@ -39,8 +45,10 @@ function engine(on: On, listReply: string) {
     const text =
       e.tool === 'list_sessions'
         ? listReply
-        : e.tool === 'get_session'
-          ? JSON.stringify({ sessionId: id, createdAt: '2026-11-03T07:01:00Z', scheduledTaskId: id === 'local_r' ? 'nightly-report' : undefined })
+        : e.tool === 'get_session' && id === 'self'
+          ? JSON.stringify(CURRENT)
+          : e.tool === 'get_session'
+            ? JSON.stringify({ sessionId: id, createdAt: '2026-11-03T07:01:00Z', scheduledTaskId: id === 'local_r' ? 'nightly-report' : undefined })
           : 'Deleted 1 session.'
 
     return { value: { content: [{ type: 'text', text }], isError: false } }
@@ -52,7 +60,7 @@ function engine(on: On, listReply: string) {
 test('status columns, rails, routines and sub-sessions', async ($, on) => {
   const { calls, clock } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'kanban' })
+  await $.command.run(RUN_KANBAN)
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -63,6 +71,8 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /^1$/ }))?.text).toBe('1')
 
   expect((await ui.find({ key: 'local_a' }))?.text).toBe('Logging')
+  expect((await ui.find({ key: 'local_s' }))?.text).toBe('Board work')
+  expect((await ui.find({ type: 'Text', text: /^this session/ }))?.text).toBe('this session · 5m ago · claude/board')
   expect((await ui.find({ type: 'Text', text: /20m ago/ }))?.text).toBe('20m ago · claude/logging-a1b2c3')
   expect(await ui.find({ key: 'pin-local_a' })).toBeDefined()
   expect(await ui.find({ key: 'archive-local_a' })).toBeDefined()
@@ -136,7 +146,7 @@ test('a list too large to pass back is asked again at half the limit', async ($,
     return { value: { content: [{ type: 'text', text }], isError: false } }
   })
 
-  await $.command.run({ command: 'kanban' })
+  await $.command.run(RUN_KANBAN)
   await clock.advance(1)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.select({ key: 'count', value: 'all' })
@@ -152,7 +162,7 @@ test('a list too large to pass back is asked again at half the limit', async ($,
 test('a failed session list is shown, not thrown', async ($, on) => {
   // The app's tool reports some failures as plain text with isError false.
   const { clock } = engine(on, 'Error: server not connected')
-  await $.command.run({ command: 'kanban' })
+  await $.command.run(RUN_KANBAN)
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })

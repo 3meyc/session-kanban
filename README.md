@@ -47,7 +47,6 @@ The pane opens when a session starts. Reopen it any time with:
 
 - **Auto mode refuses the card actions.** Its safety check only lets through actions you asked for in chat, so Pin, Archive and Unarchive are refused there. The board then puts the request in the prompt box for you to send, or tells you what to ask. In the Default permission mode the app shows its own approval card instead. Delete always asks for approval first.
 - **No "needs input" status:** the app's session list does not report whether a session is waiting for you.
-- **The current session is not on the board:** the session list leaves out the session that asks for it.
 - **Routines** are recognised by looking each session up once; on a first load an older routine run can show for a minute until its lookup returns.
 - **Icons are Unicode characters:** buttons take only text, so icon sets such as Lucide cannot be used on them.
 

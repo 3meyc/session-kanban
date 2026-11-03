@@ -9,6 +9,8 @@ export type Card = {
   isRunning: boolean
   isArchived: boolean
   isPinned: boolean
+  // The session the board runs in, which list_sessions leaves out.
+  isCurrent: boolean
   lastActivityAt: number
 }
 
