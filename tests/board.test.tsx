@@ -159,6 +159,24 @@ test('a list too large to pass back is asked again at half the limit', async ($,
   await ui.unmount()
 })
 
+test('a card is in progress while a sub-session beneath it runs', async ($, on) => {
+  const family = [
+    { sessionId: 'local_p', title: 'Parent', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_p' },
+    { sessionId: 'local_k', title: 'Child', startedBy: 'local_p', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_k' },
+    { sessionId: 'local_g', title: 'Grandchild', startedBy: 'local_k', isRunning: true, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_g' },
+  ]
+  const { clock } = engine(on, JSON.stringify(family))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Only the grandchild runs, yet the whole family's card counts as in progress.
+  expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 1')
+  expect(await ui.find({ key: 'local_k' })).toBeDefined()
+  expect(await ui.find({ key: 'archive-local_p' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('a failed session list is shown, not thrown', async ($, on) => {
   // The app's tool reports some failures as plain text with isError false.
   const { clock } = engine(on, 'Error: server not connected')

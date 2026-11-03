@@ -331,7 +331,19 @@ export const register: Register = on => {
         childrenOf.set(card.parentId, [...(childrenOf.get(card.parentId) ?? []), card])
       }
     }
-    const topLevel = all.filter(card => isVisible(card) && !(card.parentId && visibleIds.has(card.parentId)))
+    // A card is in progress while any session beneath it runs, at any depth and
+    // whether or not the filters show it. Its footer then drops Archive, which
+    // the app refuses while a side session is still working.
+    const descendantsOf = new Map<string, Card[]>()
+    for (const card of all) {
+      if (card.parentId) descendantsOf.set(card.parentId, [...(descendantsOf.get(card.parentId) ?? []), card])
+    }
+    const isBusy = (card: Card, seen: Set<string>): boolean =>
+      card.isRunning ||
+      (descendantsOf.get(card.id) ?? []).some(child => !seen.has(child.id) && isBusy(child, seen.add(child.id)))
+    const topLevel = all
+      .filter(card => isVisible(card) && !(card.parentId && visibleIds.has(card.parentId)))
+      .map(card => (!card.isRunning && !card.isArchived && isBusy(card, new Set([card.id])) ? { ...card, isRunning: true } : card))
     const cardsIn = (column: Column) =>
       topLevel
         .filter(card => column.pick(card, now))
