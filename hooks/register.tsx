@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { Card, CornerStyle, Detail, TitleMode } from '../types'
 
@@ -324,16 +324,10 @@ export const register: Register = on => {
       (routinesShown || known[card.id]?.isRoutine !== true)
     const visibleIds = new Set(all.filter(isVisible).map(card => card.id))
     // A sub-session rides inside its parent's card while that card is on the
-    // board; with the parent filtered out it stands as a card of its own.
-    const childrenOf = new Map<string, Card[]>()
-    for (const card of all) {
-      if (card.parentId && visibleIds.has(card.parentId)) {
-        childrenOf.set(card.parentId, [...(childrenOf.get(card.parentId) ?? []), card])
-      }
-    }
-    // A card is in progress while any session beneath it runs, at any depth and
-    // whether or not the filters show it. Its footer then drops Archive, which
-    // the app refuses while a side session is still working.
+    // board, its own sub-sessions under it; with the parent filtered out it
+    // stands as a card of its own. A card is in progress while any session
+    // beneath it runs, at any depth and whether or not the filters show it. Its
+    // footer then drops Archive, which the app refuses while a side session works.
     const descendantsOf = new Map<string, Card[]>()
     for (const card of all) {
       if (card.parentId) descendantsOf.set(card.parentId, [...(descendantsOf.get(card.parentId) ?? []), card])
@@ -463,18 +457,40 @@ export const register: Register = on => {
     // Lucide's arrow-right as a glyph: a Button takes only text, and an Svg cannot be pressed.
     const openIcon = (card: Card) => icon(`open-${card.id}`, '→', () => later($, () => openCard($, card)))
 
-    const subRow = (sub: Card) => {
+    const childrenBelow = (id: string) =>
+      [...(descendantsOf.get(id) ?? [])].sort(
+        (a, b) => Number(a.isArchived) - Number(b.isArchived) || b.lastActivityAt - a.lastActivityAt,
+      )
+    // Every session beneath a card, at any depth; `seen` guards a parent loop.
+    const familyOf = (id: string, seen: Set<string>): Card[] =>
+      childrenBelow(id).flatMap(child =>
+        seen.has(child.id) ? [] : [child, ...familyOf(child.id, seen.add(child.id))],
+      )
+    // Archived sub-sessions follow the Archived column: listed only while it is open.
+    const isListed = (sub: Card) => archivedOpen || !sub.isArchived
+
+    // A sub-session's own sub-sessions sit under it, one indent deeper.
+    const subTree = (sub: Card, seen: Set<string>): RenderElement => {
       const marker = sub.isArchived ? '✓' : sub.isRunning ? '●' : '○'
       const color = sub.isArchived ? 'inactive' : sub.isRunning ? 'success' : 'subtle'
+      const below = childrenBelow(sub.id).filter(child => isListed(child) && !seen.has(child.id))
+      for (const child of below) seen.add(child.id)
 
       return (
-        <Box key={`sub-${sub.id}`} flexDirection="row" gap="xs" alignItems="flex-start">
-          <Text color={color}>{marker}</Text>
-          <Box flexDirection="column" flexShrink={1} minWidth={0}>
-            {titleOf(sub, sub.isArchived)}
+        <Box key={`sub-${sub.id}`} flexDirection="column">
+          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+            <Text color={color}>{marker}</Text>
+            <Box flexDirection="column" flexShrink={1} minWidth={0}>
+              {titleOf(sub, sub.isArchived)}
+            </Box>
+            {openIcon(sub)}
+            <Box flexGrow={1} />
           </Box>
-          {openIcon(sub)}
-          <Box flexGrow={1} />
+          {below.length > 0 && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {below.map(child => subTree(child, seen))}
+            </Box>
+          )}
         </Box>
       )
     }
@@ -533,12 +549,11 @@ export const register: Register = on => {
       const detail = known[card.id]
       // A routine's runs share one title, so its run date tells them apart.
       const tag = detail?.isRoutine ? shortDate(detail.createdAt) : card.groupName
-      const subs = (childrenOf.get(card.id) ?? []).sort(
-        (a, b) => Number(a.isArchived) - Number(b.isArchived) || b.lastActivityAt - a.lastActivityAt,
-      )
+      const subs = familyOf(card.id, new Set([card.id]))
       const doneCount = subs.filter(sub => sub.isArchived).length
-      // Archived sub-sessions follow the Archived column: listed only while it is open.
-      const shownSubs = archivedOpen ? subs : subs.filter(sub => !sub.isArchived)
+      const hiddenCount = subs.filter(sub => !isListed(sub)).length
+      const firstLevel = childrenBelow(card.id).filter(isListed)
+      const seen = new Set([card.id, ...firstLevel.map(sub => sub.id)])
 
       return (
         <Box
@@ -577,9 +592,9 @@ export const register: Register = on => {
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
               <Text dimColor size="caption">
                 Sub-sessions {doneCount}/{subs.length}
-                {shownSubs.length < subs.length ? ` · ${subs.length - shownSubs.length} archived hidden` : ''}
+                {hiddenCount > 0 ? ` · ${hiddenCount} archived hidden` : ''}
               </Text>
-              {shownSubs.map(subRow)}
+              {firstLevel.map(sub => subTree(sub, seen))}
             </Box>
           )}
           {footerOf(card)}

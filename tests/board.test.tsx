@@ -173,6 +173,9 @@ test('a card is in progress while a sub-session beneath it runs', async ($, on) 
   // Only the grandchild runs, yet the whole family's card counts as in progress.
   expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 1')
   expect(await ui.find({ key: 'local_k' })).toBeDefined()
+  // The grandchild is listed too, under the child, and counted in the parent's tasks.
+  expect(await ui.find({ key: 'local_g' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Sub-sessions 0/2' })).toBeDefined()
   expect(await ui.find({ key: 'archive-local_p' })).toBeUndefined()
   await ui.unmount()
 })
