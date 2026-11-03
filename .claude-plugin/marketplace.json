@@ -1,0 +1,6 @@
+{
+  "name": "session-kanban",
+  "owner": { "name": "3meyc" },
+  "description": "A Kanban board of your Claude Code desktop sessions",
+  "plugins": [{ "name": "session-kanban", "source": "./" }]
+}

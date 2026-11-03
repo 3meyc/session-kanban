@@ -1,0 +1,40 @@
+export type Card = {
+  id: string
+  title: string
+  groupId: string | null
+  groupName: string | null
+  branch: string | null
+  link: string | null
+  parentId: string | null
+  isRunning: boolean
+  isArchived: boolean
+  isPinned: boolean
+  lastActivityAt: number
+}
+
+// What only get_session tells about a session; fixed for its life, so looked up once.
+export type Detail = { isRoutine: boolean; createdAt: number }
+
+export type TitleMode = 'ellipsis' | 'multiline'
+
+export type CornerStyle = 'square' | 'rounded'
+
+declare module 'claude-code' {
+  interface PluginState {
+    'session-kanban': {
+      cards: Shaped<Card[]>
+      details: Shaped<Record<string, Detail>>
+      filter: string
+      isThisWeek: boolean
+      isRoutinesShown: boolean
+      isArchivedOpen: boolean
+      isProgressOpen: boolean
+      isSettingsOpen: boolean
+      titleMode: TitleMode
+      cornerStyle: CornerStyle
+      loadCount: string
+      fetchedAt: number
+      error: string | null
+    }
+  }
+}

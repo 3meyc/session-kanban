@@ -1,0 +1,64 @@
+# Session Kanban
+
+A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pane beside the chat, instead of the sidebar's tree.
+
+- **Columns by status:** In progress, Today, Earlier, Archived, each on a pale tint of its colour.
+- **Collapsible rails:** In progress shrinks to a thin rail when nothing is running; Archived is a thin rail with its count until you open it.
+- **Cards:** title with an open arrow (`→`), the sidebar section as a tag, time since last activity and branch underneath (selectable, so the branch can be copied), and a footer with Pin/Unpin and Archive, or Delete and Unarchive on archived cards.
+- **Pinned sessions** sort to the top of their column and carry a thin coloured bar on the left.
+- **Sub-sessions** (sessions Claude started from another, or forks) are listed inside their parent's card as a task list; archived ones show only while the Archived column is open.
+- **Toolbar:** filter by sidebar section, how many sessions to load (25, 50, 100, All), This week, Show routines (routine runs are tagged with their run date), Refresh.
+- **Settings (⚙):** titles on one line or multiline; square or rounded cards.
+
+The board refreshes every 30 seconds.
+
+## Requirements
+
+- The **Claude desktop app** (Code tab). The board reads the app's own session list, so it shows nothing in a plain terminal session.
+- **macOS** to open a session from a card: it uses the `open` command with the session's app link.
+
+## Install
+
+At the prompt of a terminal session:
+
+```
+/plugin install session-kanban --marketplace 3meyc/session-kanban
+```
+
+Answer `y` to add the marketplace, then pick a scope (user scope loads it in every session).
+
+From a shell:
+
+```bash
+claude plugin install session-kanban --marketplace 3meyc/session-kanban
+```
+
+In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `3meyc/session-kanban`, then **Add plugin**.
+
+## Use
+
+The pane opens when a session starts. Reopen it any time with:
+
+```
+/kanban
+```
+
+## Limits
+
+- **Auto mode refuses the card actions.** Its safety check only lets through actions you asked for in chat, so Pin, Archive and Unarchive are refused there. The board then puts the request in the prompt box for you to send, or tells you what to ask. In the Default permission mode the app shows its own approval card instead. Delete always asks for approval first.
+- **No "needs input" status:** the app's session list does not report whether a session is waiting for you.
+- **The current session is not on the board:** the session list leaves out the session that asks for it.
+- **Routines** are recognised by looking each session up once; on a first load an older routine run can show for a minute until its lookup returns.
+- **Icons are Unicode characters:** buttons take only text, so icon sets such as Lucide cannot be used on them.
+
+## Develop
+
+```bash
+claude plugin validate .
+```
+
+```bash
+claude plugin test .
+```
+
+To run a working copy in a session, start it with `claude --plugin-dir <this folder>`.

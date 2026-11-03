@@ -1,0 +1,161 @@
+import { expect, mock, test } from 'claude-code/testing'
+
+const NOW = Date.parse('2026-11-03T12:00:00Z')
+
+const PANE = {
+  plugin: 'session-kanban',
+  component: 'Pane',
+  requestId: 'session-kanban',
+  props: {
+    title: 'Sessions board',
+    isFocused: false,
+    bodyColumns: 140,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 40 },
+    view: {},
+  },
+} as const
+
+const SESSIONS = [
+  { sessionId: 'local_a', title: 'Logging', branch: 'claude/logging-a1b2c3', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:40:00Z', group: { id: 'g1', name: 'Local tools' }, link: 'claude://x/local_a' },
+  { sessionId: 'local_b', title: 'API migration', pinned: true, isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T07:00:00Z', group: { id: 'g2', name: 'Backend' }, link: 'claude://x/local_b' },
+  { sessionId: 'local_c', title: 'Old spike', isRunning: false, isArchived: false, lastActivityAt: '2026-10-20T07:00:00Z', group: null, link: 'claude://x/local_c' },
+  { sessionId: 'local_d', title: 'Shipped thing', isRunning: false, isArchived: true, lastActivityAt: '2026-11-01T07:00:00Z', group: { id: 'g1', name: 'Local tools' }, link: 'claude://x/local_d' },
+  { sessionId: 'local_e', title: 'Logging tests', startedBy: 'local_a', isRunning: false, isArchived: true, lastActivityAt: '2026-11-03T11:00:00Z', group: { id: 'g1', name: 'Local tools' }, link: 'claude://x/local_e' },
+  { sessionId: 'local_r', title: 'Nightly report', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T07:02:00Z', group: null, link: 'claude://x/local_r' },
+]
+
+type On = Parameters<Parameters<typeof test>[1]>[1]
+
+function engine(on: On, listReply: string) {
+  const calls: string[] = []
+  const clock = mock.clock(on, { now: NOW })
+  on('command.register', () => ({ value: { command: 'kanban' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('mcp.call', (_, e) => {
+    calls.push(e.tool)
+    const id = String(e.args.session_id ?? '')
+    const text =
+      e.tool === 'list_sessions'
+        ? listReply
+        : e.tool === 'get_session'
+          ? JSON.stringify({ sessionId: id, createdAt: '2026-11-03T07:01:00Z', scheduledTaskId: id === 'local_r' ? 'nightly-report' : undefined })
+          : 'Deleted 1 session.'
+
+    return { value: { content: [{ type: 'text', text }], isError: false } }
+  })
+
+  return { calls, clock }
+}
+
+test('status columns, rails, routines and sub-sessions', async ($, on) => {
+  const { calls, clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'kanban' })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Nothing runs, so In progress is a rail with no title; Archived is a rail with its count.
+  expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
+  expect(await ui.find({ key: 'expand-progress' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Archived/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^1$/ }))?.text).toBe('1')
+
+  expect((await ui.find({ key: 'local_a' }))?.text).toBe('Logging')
+  expect((await ui.find({ type: 'Text', text: /20m ago/ }))?.text).toBe('20m ago · claude/logging-a1b2c3')
+  expect(await ui.find({ key: 'pin-local_a' })).toBeDefined()
+  expect(await ui.find({ key: 'archive-local_a' })).toBeDefined()
+  expect((await ui.find({ key: 'pin-local_b' }))?.text).toBe('Unpin')
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Local tools' })).toBeDefined()
+  // The archived sub-session is counted in its parent but listed only with Archived open.
+  expect(await ui.find({ key: 'local_e' })).toBeUndefined()
+  expect(await ui.find({ key: 'card-local_e' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Sub-sessions 1/1 · 1 archived hidden' })).toBeDefined()
+
+  // The routine run is hidden until asked for, then tagged with its run date.
+  expect(await ui.find({ key: 'local_r' })).toBeUndefined()
+  await ui.press({ key: 'routines' })
+  expect(await ui.find({ key: 'local_r' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '03.11.26' })).toBeDefined()
+
+  await ui.press({ key: 'expand-archived' })
+  expect(await ui.find({ key: 'local_e' })).toBeDefined()
+  expect(await ui.find({ key: 'local_d' })).toBeDefined()
+  expect(await ui.find({ key: 'unarchive-local_d' })).toBeDefined()
+  await ui.press({ key: 'delete-local_d' })
+  // The delete runs from a timer, outside the press's budget.
+  await clock.advance(1)
+  expect(calls).toContain('delete_session')
+  await ui.press({ key: 'collapse-archived' })
+  expect(await ui.find({ key: 'local_d' })).toBeUndefined()
+
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'title-mode', value: 'multiline' })
+  expect(await ui.find({ key: 'open-local_a' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Logging' })).toBeDefined()
+  await ui.select({ key: 'title-mode', value: 'ellipsis' })
+  await ui.select({ key: 'corners', value: 'rounded' })
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+
+  await ui.press({ key: 'expand-progress' })
+  expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeDefined()
+
+  expect(await ui.find({ key: 'local_c' })).toBeDefined()
+  await ui.press({ key: 'week' })
+  expect(await ui.find({ key: 'local_c' })).toBeUndefined()
+
+  await ui.select({ key: 'filter', value: 'g1' })
+  expect(await ui.find({ key: 'local_b' })).toBeUndefined()
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  await ui.unmount()
+
+  for (const surface of ['terminal', 'vscode', 'mobile'] as const) {
+    const other = await $.ui.mount({ ...PANE, surface })
+    expect(await other.find({ key: 'local_a' })).toBeDefined()
+    await other.unmount()
+  }
+})
+
+test('a list too large to pass back is asked again at half the limit', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const limits: unknown[] = []
+  on('command.register', () => ({ value: { command: 'kanban' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('mcp.call', (_, e) => {
+    if (e.tool === 'list_sessions') limits.push(e.args.limit)
+    const tooBig = e.tool === 'list_sessions' && Number(e.args.limit) > 300
+    const active = SESSIONS.filter(one => !one.isArchived)
+    const text = tooBig
+      ? 'Error: result (110,095 characters) exceeds maximum allowed tokens.'
+      : e.tool === 'list_sessions'
+        ? JSON.stringify(e.args.include_archived ? SESSIONS : active)
+        : '{}'
+
+    return { value: { content: [{ type: 'text', text }], isError: false } }
+  })
+
+  await $.command.run({ command: 'kanban' })
+  await clock.advance(1)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.select({ key: 'count', value: 'all' })
+  await clock.advance(1)
+
+  // 25 by default, then "All": 1000 refused, 500 refused, 250 fits, for each of the two asks.
+  expect(limits).toEqual([25, 25, 1000, 500, 250, 1000, 500, 250])
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /exceeds/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a failed session list is shown, not thrown', async ($, on) => {
+  // The app's tool reports some failures as plain text with isError false.
+  const { clock } = engine(on, 'Error: server not connected')
+  await $.command.run({ command: 'kanban' })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /server not connected/ }))?.text).toBe('Error: server not connected')
+  await ui.unmount()
+})
