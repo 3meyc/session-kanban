@@ -612,14 +612,7 @@ export const register: Register = on => {
               </Box>
             )}
           </Box>
-          <Box paddingLeft={inset} flexDirection="row" gap="xs">
-            {card.isCurrent && (
-              <Box flexShrink={0}>
-                <Text color={column.color} bold size="caption">
-                  this session
-                </Text>
-              </Box>
-            )}
+          <Box paddingLeft={inset}>
             <Text dimColor size="caption" wrap={isMultiline ? 'wrap' : 'truncate-end'}>
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>

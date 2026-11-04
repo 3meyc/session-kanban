@@ -6,7 +6,7 @@ A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pa
 - **Collapsible rails:** In progress shrinks to a thin rail when nothing is running; Archived is a thin rail with its count until you open it.
 - **Cards:** title with an open arrow (`→`), the sidebar section as a tag, time since last activity and branch underneath (selectable, so the branch can be copied), and a footer with Pin/Unpin and Archive, or Delete and Unarchive on archived cards.
 - **Pinned sessions** sort to the top of their column and carry a thin coloured bar on the left.
-- **The session you are in** (the one the board runs in) is filled in a stronger shade of its column and labelled "this session", as a card or as a sub-session line.
+- **The session you are in** (the one the board runs in) is filled in a stronger shade of its column, as a card or as a sub-session line.
 - **Sub-sessions** (sessions Claude started from another, or forks) are listed inside their parent's card as a task list; archived ones show only while the Archived column is open.
 - **Toolbar:** filter by sidebar section, how many sessions to load (25, 50, 100, All), This week, Show routines (routine runs are tagged with their run date), Refresh.
 - **Settings:** titles on one line or multiline; square or rounded cards.
