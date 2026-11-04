@@ -73,7 +73,11 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
 
   expect((await ui.find({ key: 'local_a' }))?.text).toBe('Logging')
   expect((await ui.find({ key: 'local_s' }))?.text).toBe('Board work')
-  expect((await ui.find({ type: 'Text', text: /^this session/ }))?.text).toBe('this session · 5m ago · claude/board')
+  expect(await ui.find({ type: 'Text', text: 'this session' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5m ago · claude/board' })).toBeDefined()
+  // The board's own session takes its column's hue; the others keep the plain card fill.
+  expect((await ui.find({ key: 'card-local_s' }))?.props.backgroundColor).toBe('#3b82f640')
+  expect((await ui.find({ key: 'card-local_a' }))?.props.backgroundColor).toBe('#ffffff0f')
   expect((await ui.find({ type: 'Text', text: /20m ago/ }))?.text).toBe('20m ago · claude/logging-a1b2c3')
   expect(await ui.find({ key: 'pin-local_a' })).toBeDefined()
   expect(await ui.find({ key: 'archive-local_a' })).toBeDefined()

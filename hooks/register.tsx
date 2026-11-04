@@ -375,6 +375,8 @@ export const register: Register = on => {
     })
     // Multiline titles are plain Text (a Button never wraps), so nothing is inset.
     const inset = isMultiline ? 0 : BUTTON_INSET
+    // The session this board runs in takes its column's own hue, a step stronger than the column.
+    const currentFill = (column: Column) => `${column.tint.slice(0, 7)}40`
 
     // Only desktop and vscode draw a Select; elsewhere a setting is shown, not picked.
     const canPick = e.surface === 'desktop' || e.surface === 'vscode'
@@ -493,7 +495,7 @@ export const register: Register = on => {
     const isListed = (sub: Card) => archivedOpen || !sub.isArchived
 
     // A sub-session's own sub-sessions sit under it, one indent deeper.
-    const subTree = (sub: Card, seen: Set<string>): RenderElement => {
+    const subTree = (sub: Card, seen: Set<string>, column: Column): RenderElement => {
       const marker = sub.isArchived ? '✓' : sub.isRunning ? '●' : '○'
       const color = sub.isArchived ? 'inactive' : sub.isRunning ? 'success' : 'subtle'
       const below = childrenBelow(sub.id).filter(child => isListed(child) && !seen.has(child.id))
@@ -501,7 +503,12 @@ export const register: Register = on => {
 
       return (
         <Box key={`sub-${sub.id}`} flexDirection="column">
-          <Box flexDirection="row" gap="xs" alignItems="flex-start">
+          <Box
+            flexDirection="row"
+            gap="xs"
+            alignItems="flex-start"
+            backgroundColor={isPainted && sub.isCurrent ? currentFill(column) : undefined}
+          >
             <Text color={color}>{marker}</Text>
             {/* The spacer before the arrow lines every level's arrows up at the card's right edge. */}
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
@@ -512,7 +519,7 @@ export const register: Register = on => {
           </Box>
           {below.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
-              {below.map(child => subTree(child, seen))}
+              {below.map(child => subTree(child, seen, column))}
             </Box>
           )}
         </Box>
@@ -583,9 +590,9 @@ export const register: Register = on => {
           key={`card-${card.id}`}
           flexDirection="column"
           {...(isSquare
-            ? { paddingY: 'sm' as const, hover: { backgroundColor: CARD_HOVER_FILL } }
+            ? { paddingY: 'sm' as const, hover: { backgroundColor: card.isCurrent ? currentFill(column) : CARD_HOVER_FILL } }
             : { borderStyle: 'single', borderDimColor: true, hover: { borderColor: column.color, borderDimColor: false } })}
-          backgroundColor={isPainted ? CARD_FILL : undefined}
+          backgroundColor={isPainted ? (card.isCurrent ? currentFill(column) : CARD_FILL) : undefined}
           paddingX={1}
           overflow="hidden"
         >
@@ -605,9 +612,15 @@ export const register: Register = on => {
               </Box>
             )}
           </Box>
-          <Box paddingLeft={inset}>
+          <Box paddingLeft={inset} flexDirection="row" gap="xs">
+            {card.isCurrent && (
+              <Box flexShrink={0}>
+                <Text color={column.color} bold size="caption">
+                  this session
+                </Text>
+              </Box>
+            )}
             <Text dimColor size="caption" wrap={isMultiline ? 'wrap' : 'truncate-end'}>
-              {card.isCurrent ? 'this session · ' : ''}
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>
@@ -617,7 +630,7 @@ export const register: Register = on => {
                 Sub-sessions: {subs.length}
                 {doneCount > 0 ? ` (${doneCount} archived)` : ''}
               </Text>
-              {firstLevel.map(sub => subTree(sub, seen))}
+              {firstLevel.map(sub => subTree(sub, seen, column))}
             </Box>
           )}
           {footerOf(card)}
