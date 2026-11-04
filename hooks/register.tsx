@@ -722,9 +722,13 @@ export const register: Register = on => {
             <Button key="refresh" label="Refresh" onPress={() => later($, () => refresh($))} />
             {statusNote}
           </Box>
-          <Button key="settings" plain dimColor={!settingsOpen} onPress={() => update($, isSettingsOpen, isOn => !isOn)}>
-            <Text size="heading">⚙</Text>
-          </Button>
+          {/* A word, not a glyph: a Button draws its text at one fixed size. */}
+          <Button
+            key="settings"
+            label="Settings"
+            variant={settingsOpen ? 'primary' : 'secondary'}
+            onPress={() => update($, isSettingsOpen, isOn => !isOn)}
+          />
         </Box>
         {settingsOpen && (
           <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
