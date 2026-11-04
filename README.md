@@ -46,6 +46,7 @@ The pane opens when a session starts. Reopen it any time with:
 ## Limits
 
 - **Auto mode refuses the card actions.** Its safety check only lets through actions you asked for in chat, so Pin, Archive and Unarchive are refused there. The board then puts the request in the prompt box for you to send, or tells you what to ask. In the Default permission mode the app shows its own approval card instead. Delete always asks for approval first.
+- **Brief disconnects:** after the Mac wakes, the app's tools take a moment to reconnect. The board keeps the last cards, says how old they are, and retries after 5, 15 and 30 seconds; only a disconnect lasting over 3 minutes, or any other error, shows a red banner with the details.
 - **No "needs input" status:** the app's session list does not report whether a session is waiting for you.
 - **Routines** are recognised by looking each session up once; on a first load an older routine run can show for a minute until its lookup returns.
 - **Icons are Unicode characters:** buttons take only text, so icon sets such as Lucide cannot be used on them.

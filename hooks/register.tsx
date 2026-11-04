@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Card, CornerStyle, Detail, TitleMode } from '../types'
+import type { Card, CornerStyle, Detail, Failure, TitleMode } from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -36,7 +36,7 @@ const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, 
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
-const error = atom({ plugin: 'session-kanban', key: 'error' } as const, null)
+const failure = atom({ plugin: 'session-kanban', key: 'failure' } as const, null as Failure | null)
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
 // both light and dark themes; theme keys have no translucent variant.
@@ -70,6 +70,8 @@ const ARCHIVED: Column = { key: 'archived', title: 'Archived', color: 'inactive'
 const CARD_FILL = '#ffffff0f'
 // A borderless card shows the pointer by lifting its fill instead of its border.
 const CARD_HOVER_FILL = '#ffffff17'
+// A pale red wash behind the problem banner, in the same alpha as the columns.
+const ERROR_FILL = '#ef44441a'
 // One step above the card's fill, so an action reads as a control on it.
 const ACTION_FILL = '#ffffff1a'
 
@@ -208,17 +210,38 @@ async function learnDetails($: EngineInterface, list: Card[]) {
   await update($, details, current => ({ ...current, ...learned }))
 }
 
+// After the Mac wakes or the app reconnects, its tools are briefly not
+// connected; those failures pass on their own and are retried quietly.
+const OFFLINE_PATTERN = /no connected MCP tool|not connected|disconnected|connection closed|ECONNRESET|ECONNREFUSED|timed out/i
+// Retry sooner than the 30 s poll after a failure, then fall back to it.
+const RETRY_STEPS_MS = [5_000, 15_000, POLL_MS]
+// A connection still lost after this long is shown as a problem, not a blip.
+const OFFLINE_GRACE_MS = 3 * 60_000
+
+let retryTimer: ReturnType<EngineInterface['clock']['after']> | null = null
+
 async function refresh($: EngineInterface) {
+  retryTimer?.cancel()
+  retryTimer = null
   const outcome = await listSessions($)
+  const at = await $.clock.now()
   if ('list' in outcome) {
     await update($, cards, () => outcome.list)
-    await update($, error, () => null)
+    await update($, failure, () => null)
+    // Only a successful load moves this, so a failure can say how old the cards are.
+    await update($, fetchedAt, () => at)
     await learnDetails($, outcome.list)
-  } else {
-    await update($, error, () => outcome.problem)
+    return
   }
-  const at = await $.clock.now()
-  await update($, fetchedAt, () => at)
+  const kind: Failure['kind'] = OFFLINE_PATTERN.test(outcome.problem) ? 'offline' : 'error'
+  const next = await update($, failure, previous => ({
+    kind,
+    message: outcome.problem,
+    since: previous?.since ?? at,
+    attempts: (previous?.attempts ?? 0) + 1,
+  }))
+  const step = RETRY_STEPS_MS[Math.min((next?.attempts ?? 1) - 1, RETRY_STEPS_MS.length - 1)] ?? POLL_MS
+  retryTimer = $.clock.after(step, () => void refresh($))
 }
 
 async function openCard($: EngineInterface, card: Card) {
@@ -305,7 +328,7 @@ export const register: Register = on => {
     // The desktop rounds every bordered Box, so a square card is one with no
     // border at all; a terminal keeps its border, having no fill to show a card by.
     const isSquare = (await read($, cornerStyle)) === 'square' && e.surface !== 'terminal'
-    const failure = await read($, error)
+    const problem = await read($, failure)
     const lastFetch = await read($, fetchedAt)
     const now = await $.clock.now()
 
@@ -663,6 +686,21 @@ export const register: Register = on => {
     const progressCount = cardsIn(PROGRESS).length
     const archivedCount = cardsIn(ARCHIVED).length
 
+    // A brief disconnect is a quiet note beside the count; an error, or a
+    // disconnect that outlasts the grace period, also gets the banner below.
+    const isSerious = problem !== null && (problem.kind === 'error' || now - problem.since >= OFFLINE_GRACE_MS)
+    const dataAge = lastFetch ? `showing data from ${age(now - lastFetch)} ago` : 'no data yet'
+    const statusNote =
+      problem === null ? (
+        <Text dimColor>
+          {topLevel.length} sessions{lastFetch ? ` · updated ${age(now - lastFetch)} ago` : ' · loading…'}
+        </Text>
+      ) : (
+        <Text color={isSerious ? 'error' : 'warning'}>
+          {problem.kind === 'offline' ? "Can't reach the app right now · retrying" : 'Refresh failed'} · {dataAge}
+        </Text>
+      )
+
     return (
       <Box flexDirection="column" gap="sm">
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm">
@@ -682,9 +720,7 @@ export const register: Register = on => {
               onPress={() => update($, isRoutinesShown, isOn => !isOn)}
             />
             <Button key="refresh" label="Refresh" onPress={() => later($, () => refresh($))} />
-            <Text dimColor>
-              {topLevel.length} sessions{lastFetch ? ` · updated ${age(now - lastFetch)} ago` : ' · loading…'}
-            </Text>
+            {statusNote}
           </Box>
           <Button key="settings" plain dimColor={!settingsOpen} onPress={() => update($, isSettingsOpen, isOn => !isOn)}>
             <Text size="heading">⚙</Text>
@@ -697,7 +733,21 @@ export const register: Register = on => {
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
           </Box>
         )}
-        {failure && <Text color="error">{failure}</Text>}
+        {isSerious && problem && (
+          <Box flexDirection="column" paddingX={1} paddingY="xs" backgroundColor={isPainted ? ERROR_FILL : undefined}>
+            <Text color="error" bold>
+              {problem.kind === 'offline' ? "The board can't reach the app's session list" : 'The app could not list your sessions'}
+            </Text>
+            <Text wrap="wrap">
+              {problem.kind === 'offline'
+                ? `It has been out of reach for ${age(now - problem.since)}. The board keeps retrying every 30 seconds; press Refresh to try now. If this lasts, restart the Claude app.`
+                : 'Press Refresh to try again. If it keeps failing, the details below help when reporting it.'}
+            </Text>
+            <Text dimColor size="caption" wrap="wrap">
+              {problem.message}
+            </Text>
+          </Box>
+        )}
         <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="stretch">
           {progressCount > 0
             ? fullColumn(PROGRESS)

@@ -21,6 +21,10 @@ export type TitleMode = 'ellipsis' | 'multiline'
 
 export type CornerStyle = 'square' | 'rounded'
 
+// The last failed load: `offline` while the app's tools are reconnecting,
+// `error` for anything else; `since` is when the run of failures began.
+export type Failure = { kind: 'offline' | 'error'; message: string; since: number; attempts: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'session-kanban': {
@@ -36,7 +40,7 @@ declare module 'claude-code' {
       cornerStyle: CornerStyle
       loadCount: string
       fetchedAt: number
-      error: string | null
+      failure: Failure | null
     }
   }
 }

@@ -33,7 +33,8 @@ type On = Parameters<TestBody>[1]
 // What the engine stamps on a typed /kanban.
 const RUN_KANBAN = { command: 'kanban', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } } as const
 
-function engine(on: On, listReply: string) {
+// `listReply` is a function where a test changes the reply between refreshes.
+function engine(on: On, listReply: string | (() => string)) {
   const calls: string[] = []
   const clock = mock.clock(on, { now: NOW })
   on('command.register', () => ({ value: { command: 'kanban' } }))
@@ -44,7 +45,7 @@ function engine(on: On, listReply: string) {
     const id = String(e.args.session_id ?? '')
     const text =
       e.tool === 'list_sessions'
-        ? listReply
+        ? typeof listReply === 'function' ? listReply() : listReply
         : e.tool === 'get_session' && id === 'self'
           ? JSON.stringify(CURRENT)
           : e.tool === 'get_session'
@@ -180,13 +181,49 @@ test('a card is in progress while a sub-session beneath it runs', async ($, on) 
   await ui.unmount()
 })
 
-test('a failed session list is shown, not thrown', async ($, on) => {
+test('a lost connection keeps the cards, retries soon, and escalates when it lasts', async ($, on) => {
+  // What the engine answers while the app's tools reconnect after the Mac wakes.
+  const OFFLINE = 'HooksError: session-kanban: $.mcp.call: no connected MCP tool "list_sessions" on a server named "ccd_session_mgmt"'
+  let reply = JSON.stringify(SESSIONS)
+  const { calls, clock } = engine(on, () => reply)
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+
+  reply = OFFLINE
+  await ui.press({ key: 'refresh' })
+  await clock.advance(1)
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /Can't reach the app/ }))?.text).toBe(
+    "Can't reach the app right now · retrying · showing data from 0m ago",
+  )
+  expect(await ui.find({ type: 'Text', text: /can't reach the app's session list/ })).toBeUndefined()
+
+  const asked = calls.filter(tool => tool === 'list_sessions').length
+  await clock.advance(5_000)
+  expect(calls.filter(tool => tool === 'list_sessions').length).toBeGreaterThan(asked)
+
+  await clock.advance(4 * 60_000)
+  expect(await ui.find({ type: 'Text', text: /can't reach the app's session list/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: OFFLINE })).toBeDefined()
+
+  reply = JSON.stringify(SESSIONS)
+  await clock.advance(30_000)
+  expect(await ui.find({ type: 'Text', text: /Can't reach/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /sessions · updated 0m ago/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('any other failure shows the banner at once, with its details', async ($, on) => {
   // The app's tool reports some failures as plain text with isError false.
-  const { clock } = engine(on, 'Error: server not connected')
+  const { clock } = engine(on, 'Error: permission denied')
   await $.command.run(RUN_KANBAN)
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /server not connected/ }))?.text).toBe('Error: server not connected')
+  expect(await ui.find({ type: 'Text', text: 'The app could not list your sessions' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Error: permission denied' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Refresh failed · no data yet/ })).toBeDefined()
   await ui.unmount()
 })
