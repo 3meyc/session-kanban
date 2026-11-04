@@ -1,6 +1,6 @@
 {
   "name": "session-kanban",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A Kanban pane of your Claude Code desktop sessions: in progress, today, earlier and archived columns, filtered by sidebar section, with sub-sessions nested in their parent's card",
   "author": { "name": "3meyc", "url": "https://github.com/3meyc" },
   "types": "./types/index.d.ts"

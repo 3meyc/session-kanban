@@ -503,11 +503,12 @@ export const register: Register = on => {
         <Box key={`sub-${sub.id}`} flexDirection="column">
           <Box flexDirection="row" gap="xs" alignItems="flex-start">
             <Text color={color}>{marker}</Text>
+            {/* The spacer before the arrow lines every level's arrows up at the card's right edge. */}
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
               {titleOf(sub, sub.isArchived)}
             </Box>
-            {openIcon(sub)}
             <Box flexGrow={1} />
+            {openIcon(sub)}
           </Box>
           {below.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
@@ -574,7 +575,6 @@ export const register: Register = on => {
       const tag = detail?.isRoutine ? shortDate(detail.createdAt) : card.groupName
       const subs = familyOf(card.id, new Set([card.id]))
       const doneCount = subs.filter(sub => sub.isArchived).length
-      const hiddenCount = subs.filter(sub => !isListed(sub)).length
       const firstLevel = childrenBelow(card.id).filter(isListed)
       const seen = new Set([card.id, ...firstLevel.map(sub => sub.id)])
 
@@ -614,8 +614,8 @@ export const register: Register = on => {
           {subs.length > 0 && (
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
               <Text dimColor size="caption">
-                Sub-sessions {doneCount}/{subs.length}
-                {hiddenCount > 0 ? ` · ${hiddenCount} archived hidden` : ''}
+                Sub-sessions: {subs.length}
+                {doneCount > 0 ? ` (${doneCount} archived)` : ''}
               </Text>
               {firstLevel.map(sub => subTree(sub, seen))}
             </Box>

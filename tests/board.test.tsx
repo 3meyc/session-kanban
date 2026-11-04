@@ -83,7 +83,7 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   // The archived sub-session is counted in its parent but listed only with Archived open.
   expect(await ui.find({ key: 'local_e' })).toBeUndefined()
   expect(await ui.find({ key: 'card-local_e' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: 'Sub-sessions 1/1 · 1 archived hidden' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Sub-sessions: 1 (1 archived)' })).toBeDefined()
 
   // The routine run is hidden until asked for, then tagged with its run date.
   expect(await ui.find({ key: 'local_r' })).toBeUndefined()
@@ -176,7 +176,7 @@ test('a card is in progress while a sub-session beneath it runs', async ($, on) 
   expect(await ui.find({ key: 'local_k' })).toBeDefined()
   // The grandchild is listed too, under the child, and counted in the parent's tasks.
   expect(await ui.find({ key: 'local_g' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Sub-sessions 0/2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Sub-sessions: 2' })).toBeDefined()
   expect(await ui.find({ key: 'archive-local_p' })).toBeUndefined()
   await ui.unmount()
 })
