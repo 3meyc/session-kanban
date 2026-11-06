@@ -493,13 +493,22 @@ export const register: Register = on => {
       )
     // Archived sub-sessions follow the Archived column: listed only while it is open.
     const isListed = (sub: Card) => archivedOpen || !sub.isArchived
+    // A hidden archived sub-session hands its own sub-sessions up to the nearest
+    // listed ancestor, as the sidebar does, so a running one is never hidden.
+    const listedBelow = (id: string, seen: Set<string>): Card[] =>
+      childrenBelow(id)
+        .flatMap(child => {
+          if (seen.has(child.id)) return []
+          seen.add(child.id)
+          return isListed(child) ? [child] : listedBelow(child.id, seen)
+        })
+        .sort((a, b) => Number(a.isArchived) - Number(b.isArchived) || b.lastActivityAt - a.lastActivityAt)
 
     // A sub-session's own sub-sessions sit under it, one indent deeper.
     const subTree = (sub: Card, seen: Set<string>, column: Column): RenderElement => {
       const marker = sub.isArchived ? '✓' : sub.isRunning ? '●' : '○'
       const color = sub.isArchived ? 'inactive' : sub.isRunning ? 'success' : 'subtle'
-      const below = childrenBelow(sub.id).filter(child => isListed(child) && !seen.has(child.id))
-      for (const child of below) seen.add(child.id)
+      const below = listedBelow(sub.id, seen)
 
       return (
         <Box key={`sub-${sub.id}`} flexDirection="column">
@@ -582,8 +591,8 @@ export const register: Register = on => {
       const tag = detail?.isRoutine ? shortDate(detail.createdAt) : card.groupName
       const subs = familyOf(card.id, new Set([card.id]))
       const doneCount = subs.filter(sub => sub.isArchived).length
-      const firstLevel = childrenBelow(card.id).filter(isListed)
-      const seen = new Set([card.id, ...firstLevel.map(sub => sub.id)])
+      const seen = new Set([card.id])
+      const firstLevel = listedBelow(card.id, seen)
 
       return (
         <Box

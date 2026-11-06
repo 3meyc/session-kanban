@@ -185,6 +185,28 @@ test('a card is in progress while a sub-session beneath it runs', async ($, on) 
   await ui.unmount()
 })
 
+test('sub-sessions of a hidden archived sub-session move up to the card', async ($, on) => {
+  const family = [
+    { sessionId: 'local_p', title: 'Parent', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_p' },
+    { sessionId: 'local_k', title: 'Done child', startedBy: 'local_p', isRunning: false, isArchived: true, lastActivityAt: '2026-11-03T11:58:00Z', group: null, link: 'claude://x/local_k' },
+    { sessionId: 'local_g', title: 'Running grandchild', startedBy: 'local_k', isRunning: true, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_g' },
+  ]
+  const { clock } = engine(on, JSON.stringify(family))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // With Archived closed the archived child is hidden, but its running child still shows.
+  expect(await ui.find({ key: 'local_k' })).toBeUndefined()
+  expect(await ui.find({ key: 'local_g' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Sub-sessions: 2 (1 archived)' })).toBeDefined()
+  // With Archived open the tree is whole again, the grandchild under its own parent.
+  await ui.press({ key: 'expand-archived' })
+  expect(await ui.find({ key: 'local_k' })).toBeDefined()
+  expect(await ui.find({ key: 'local_g' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a lost connection keeps the cards, retries soon, and escalates when it lasts', async ($, on) => {
   // What the engine answers while the app's tools reconnect after the Mac wakes.
   const OFFLINE = 'HooksError: session-kanban: $.mcp.call: no connected MCP tool "list_sessions" on a server named "ccd_session_mgmt"'
