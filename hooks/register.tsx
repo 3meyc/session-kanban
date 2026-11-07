@@ -659,9 +659,12 @@ export const register: Register = on => {
           {card.isPinned && pinBar(column)}
           {/* The spacer, not the title, takes the slack, so the open arrow sits right after the title. */}
           <Box flexDirection="row" alignItems="flex-start" gap="xs">
-            {icon(`copy-${card.id}`, '#', () => copyId($, card))}
-            <Box flexDirection="column" flexShrink={1} minWidth={0}>
-              {titleOf(card)}
+            {/* No gap inside: the title Button's own inset already spaces it from #. */}
+            <Box flexDirection="row" alignItems="flex-start" flexShrink={1} minWidth={0}>
+              {action(`copy-${card.id}`, '#', () => copyId($, card))}
+              <Box flexDirection="column" flexShrink={1} minWidth={0}>
+                {titleOf(card)}
+              </Box>
             </Box>
             {openIcon(card)}
             <Box flexGrow={1} />
