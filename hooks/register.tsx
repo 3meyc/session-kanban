@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Card, CornerStyle, Detail, Failure, OpenMode, TitleMode } from '../types'
+import type { Card, CornerStyle, Detail, Failure, TitleMode } from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -35,7 +35,6 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
-const openMode = atom({ plugin: 'session-kanban', key: 'openMode' } as const, 'switch' as OpenMode)
 const query = atom({ plugin: 'session-kanban', key: 'query' } as const, '')
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
 const failure = atom({ plugin: 'session-kanban', key: 'failure' } as const, null as Failure | null)
@@ -353,7 +352,6 @@ export const register: Register = on => {
     const isSquare = (await read($, cornerStyle)) === 'square' && e.surface !== 'terminal'
     const problem = await read($, failure)
     const lastFetch = await read($, fetchedAt)
-    const mode = await read($, openMode)
     const searchText = await read($, query)
     const needle = searchText.trim().toLowerCase()
     const now = await $.clock.now()
@@ -410,12 +408,6 @@ export const register: Register = on => {
     let filterControl = <Text dimColor>Section: {options.find(option => option.value === selected)?.label}</Text>
     let titleControl = <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>
     let cornerControl = <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>
-    const modeOptions = [
-      { value: 'switch', label: 'Switch session' },
-      { value: 'split', label: 'Split view' },
-      { value: 'both', label: 'Both buttons' },
-    ]
-    let openControl = <Text dimColor>Open: {modeOptions.find(option => option.value === mode)?.label}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -477,15 +469,6 @@ export const register: Register = on => {
           onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square'))}
         />
       )
-      openControl = (
-        <Select
-          key="open-mode"
-          label="Open"
-          options={modeOptions}
-          value={mode}
-          onSelect={value => update($, openMode, () => (value === 'split' || value === 'both' ? value : 'switch'))}
-        />
-      )
     }
 
     const icon = (key: string, glyph: string, onPress: () => unknown, isDim = true) => (
@@ -521,48 +504,20 @@ export const register: Register = on => {
       )
     }
 
-    // The app splits in only the board's own session's sub-sessions, so other
-    // cards keep the switch arrow whatever the setting.
-    const currentId = all.find(card => card.isCurrent)?.id
-    const canSplit = (card: Card) => mode !== 'switch' && currentId !== undefined && card.parentId === currentId
-    const switchTo = (card: Card) => later($, () => openCard($, card))
-    const splitIn = (card: Card) =>
-      act(
-        $,
-        'ccd_window',
-        'open_session_in',
-        { session_id: card.id, target: 'split' },
-        'Split view',
-        `Open the session "${card.title}" (${card.id}) in split view beside this one.`,
-      )
-    const openPrimary = (card: Card) => (mode === 'split' && canSplit(card) ? splitIn(card) : switchTo(card))
-
     const titleOf = (card: Card, isDim = false) =>
       isMultiline ? (
         <Text wrap="wrap" dimColor={isDim}>
           {card.title}
         </Text>
       ) : (
-        <Button key={card.id} plain dimColor={isDim} onPress={() => openPrimary(card)}>
+        <Button key={card.id} plain dimColor={isDim} onPress={() => later($, () => openCard($, card))}>
           {card.title}
         </Button>
       )
 
-    // Flat arrows as glyphs: a Button takes only text, and an Svg cannot be
-    // pressed. → switches to the session; ⇥ puts it beside this one.
-    const openIcon = (card: Card) => {
-      const switchIcon = icon(`open-${card.id}`, '→', () => switchTo(card))
-      const splitIcon = icon(`split-${card.id}`, '⇥', () => splitIn(card))
-      if (!canSplit(card)) return switchIcon
-      if (mode === 'split') return splitIcon
-
-      return (
-        <Box key={`opens-${card.id}`} flexDirection="row" gap="xs" flexShrink={0}>
-          {switchIcon}
-          {splitIcon}
-        </Box>
-      )
-    }
+    // Lucide's arrow-right as a glyph: a Button takes only text, and an Svg cannot be pressed.
+    // No split-view button: the app splits in only sessions the board's own session started.
+    const openIcon = (card: Card) => icon(`open-${card.id}`, '→', () => later($, () => openCard($, card)))
 
     const childrenBelow = (id: string) =>
       [...(descendantsOf.get(id) ?? [])].sort(
@@ -830,7 +785,6 @@ export const register: Register = on => {
         </Box>
         {settingsOpen && (
           <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
-            {openControl}
             {titleControl}
             {cornerControl}
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
