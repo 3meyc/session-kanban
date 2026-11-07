@@ -3,7 +3,7 @@
 A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pane beside the chat, instead of the sidebar's tree.
 
 - **Columns by status:** In progress, Today, Earlier, Archived, each on a pale tint of its colour.
-- **Collapsible rails:** In progress shrinks to a thin rail when nothing is running; Archived is a thin rail with its count until you open it.
+- **Collapsible sections:** every section collapses to a thin rail (or a bar in the stacked layout) with its count. In progress starts collapsed when nothing is running, Archived starts collapsed, and Today and Earlier start open.
 - **Cards:** a `#` button that copies the session id, the title with an open arrow (`→`), the sidebar section as a tag, time since last activity and branch underneath (selectable, so the branch can be copied), and a footer with Pin/Unpin and Archive, or Delete and Unarchive on archived cards.
 - **Pinned sessions** sort to the top of their column and carry a thin coloured bar on the left.
 - **The session you are in** (the one the board runs in) is filled in a stronger shade of its column, as a card or as a sub-session line.

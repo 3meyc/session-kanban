@@ -30,7 +30,8 @@ const filter = atom({ plugin: 'session-kanban', key: 'filter' } as const, 'all')
 const isThisWeek = atom({ plugin: 'session-kanban', key: 'isThisWeek' } as const, false)
 const isRoutinesShown = atom({ plugin: 'session-kanban', key: 'isRoutinesShown' } as const, false)
 const isArchivedOpen = atom({ plugin: 'session-kanban', key: 'isArchivedOpen' } as const, false)
-const isProgressOpen = atom({ plugin: 'session-kanban', key: 'isProgressOpen' } as const, false)
+// Only the sections someone opened or closed by hand; the rest follow their default.
+const openSections = atom({ plugin: 'session-kanban', key: 'openSections' } as const, {} as Record<string, boolean>)
 const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } as const, false)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
@@ -76,6 +77,10 @@ const CARD_HOVER_FILL = '#ffffff17'
 const ERROR_FILL = '#ef44441a'
 // One step above the card's fill, so an action reads as a control on it.
 const ACTION_FILL = '#ffffff1a'
+// Full-size geometric triangles: the small ▸ ▾ drew at half the text's height.
+// FE0E keeps ▶ a text glyph where macOS would draw it as an emoji.
+const STACKED_CLOSED = '▶︎'
+const STACKED_OPEN = '▼'
 
 type RawSession = {
   sessionId: string
@@ -359,7 +364,7 @@ export const register: Register = on => {
     const weekOnly = await read($, isThisWeek)
     const routinesShown = await read($, isRoutinesShown)
     const archivedOpen = await read($, isArchivedOpen)
-    const progressOpen = await read($, isProgressOpen)
+    const openedByHand = await read($, openSections)
     const settingsOpen = await read($, isSettingsOpen)
     const isMultiline = (await read($, titleMode)) === 'multiline'
     // The desktop rounds every bordered Box, so a square card is one with no
@@ -737,7 +742,7 @@ export const register: Register = on => {
               {column.title} <Text dimColor>{inColumn.length}</Text>
             </Text>
             {collapse &&
-              arrow(column, `collapse-${column.key}`, isStacked ? '▾' : column === ARCHIVED ? '❯' : '❮', collapse)}
+              arrow(column, `collapse-${column.key}`, isStacked ? STACKED_OPEN : column === ARCHIVED ? '❯' : '❮', collapse)}
           </Box>
           {inColumn.length === 0 && <Text dimColor>—</Text>}
           {inColumn.slice(0, cap).map(card => cardBox(card, column))}
@@ -761,7 +766,7 @@ export const register: Register = on => {
           <Text bold color={column.color}>
             {column.title} <Text dimColor>{count ?? 0}</Text>
           </Text>
-          {arrow(column, `expand-${column.key}`, '▸', expand)}
+          {arrow(column, `expand-${column.key}`, STACKED_CLOSED, expand)}
         </Box>
       ) : (
         <Box
@@ -783,8 +788,17 @@ export const register: Register = on => {
         </Box>
       )
 
-    const progressCount = cardsIn(PROGRESS).length
     const archivedCount = cardsIn(ARCHIVED).length
+    // In progress opens by itself while something runs; Today and Earlier start open.
+    const isOpen = (column: Column) => openedByHand[column.key] ?? (column === PROGRESS ? cardsIn(PROGRESS).length > 0 : true)
+    const setOpen = (column: Column, isOn: boolean) => update($, openSections, current => ({ ...current, [column.key]: isOn }))
+    const section = (column: Column) => {
+      const count = cardsIn(column).length
+
+      return isOpen(column)
+        ? fullColumn(column, () => setOpen(column, false))
+        : rail(column, '❯', column === PROGRESS && count === 0 ? null : count, () => setOpen(column, true))
+    }
 
     // A brief disconnect is a quiet note beside the count; an error, or a
     // disconnect that outlasts the grace period, also gets the banner below.
@@ -860,12 +874,7 @@ export const register: Register = on => {
           gap="sm"
           alignItems="stretch"
         >
-          {progressCount > 0
-            ? fullColumn(PROGRESS)
-            : progressOpen
-              ? fullColumn(PROGRESS, () => update($, isProgressOpen, () => false))
-              : rail(PROGRESS, '❯', null, () => update($, isProgressOpen, () => true))}
-          {MIDDLE.map(column => fullColumn(column))}
+          {[PROGRESS, ...MIDDLE].map(section)}
           {archivedOpen
             ? fullColumn(ARCHIVED, () => update($, isArchivedOpen, () => false))
             : rail(ARCHIVED, '❮', archivedCount, () => update($, isArchivedOpen, () => true))}

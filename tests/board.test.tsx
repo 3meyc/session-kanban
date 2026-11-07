@@ -272,6 +272,12 @@ test('stacked layout keeps the sections, with collapsed ones as titled bars', as
   expect(await ui.find({ key: 'local_d' })).toBeDefined()
   await ui.press({ key: 'collapse-archived' })
   expect(await ui.find({ key: 'local_d' })).toBeUndefined()
+  // Today starts open and collapses to a bar with its count like any other section.
+  await ui.press({ key: 'collapse-today' })
+  expect(await ui.find({ key: 'local_a' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Today/ }))?.text).toBe('Today 3')
+  await ui.press({ key: 'expand-today' })
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
   await ui.unmount()
 })
 
