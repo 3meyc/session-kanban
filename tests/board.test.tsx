@@ -207,6 +207,73 @@ test('sub-sessions of a hidden archived sub-session move up to the card', async 
   await ui.unmount()
 })
 
+test('a session that stops running is announced once', async ($, on) => {
+  const running = { sessionId: 'local_w', title: 'Long task', isRunning: true, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_w' }
+  let reply = [running]
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const { clock } = engine(on, () => JSON.stringify(reply))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+  expect(toasts).toEqual([])
+
+  reply = [{ ...running, isRunning: false }]
+  await clock.advance(30_000)
+  expect(toasts).toEqual(['Finished: "Long task"'])
+  // Still stopped on the next poll: no second toast.
+  await clock.advance(30_000)
+  expect(toasts).toEqual(['Finished: "Long task"'])
+})
+
+test('the search box keeps matching cards and a matching sub-session', async ($, on) => {
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'search', text: 'BACKEND', kind: 'change' })
+  // Matched by its section, case aside; the others drop out.
+  expect(await ui.find({ key: 'local_b' })).toBeDefined()
+  expect(await ui.find({ key: 'local_a' })).toBeUndefined()
+  // A branch matches too.
+  await ui.input({ key: 'search', text: 'logging-a1', kind: 'change' })
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  expect(await ui.find({ key: 'local_b' })).toBeUndefined()
+  await ui.input({ key: 'search', text: '', kind: 'change' })
+  expect(await ui.find({ key: 'local_b' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('split view is offered only for sessions the board session started', async ($, on) => {
+  const family = [
+    { sessionId: 'local_m', title: 'Mine', startedBy: 'local_s', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_m' },
+    { sessionId: 'local_o', title: 'Other', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_o' },
+  ]
+  const { calls, clock } = engine(on, JSON.stringify(family))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Switch (the default): one arrow each, no split.
+  expect(await ui.find({ key: 'split-local_m' })).toBeUndefined()
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'open-mode', value: 'both' })
+  expect(await ui.find({ key: 'open-local_m' })).toBeDefined()
+  expect(await ui.find({ key: 'split-local_m' })).toBeDefined()
+  // The app splits in only this session's own sub-sessions.
+  expect(await ui.find({ key: 'split-local_o' })).toBeUndefined()
+  expect(await ui.find({ key: 'open-local_o' })).toBeDefined()
+  await ui.press({ key: 'split-local_m' })
+  expect(calls).toContain('open_session_in')
+  await ui.select({ key: 'open-mode', value: 'split' })
+  expect(await ui.find({ key: 'open-local_m' })).toBeUndefined()
+  expect(await ui.find({ key: 'split-local_m' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a lost connection keeps the cards, retries soon, and escalates when it lasts', async ($, on) => {
   // What the engine answers while the app's tools reconnect after the Mac wakes.
   const OFFLINE = 'HooksError: session-kanban: $.mcp.call: no connected MCP tool "list_sessions" on a server named "ccd_session_mgmt"'

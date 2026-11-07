@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Card, CornerStyle, Detail, Failure, TitleMode } from '../types'
+import type { Card, CornerStyle, Detail, Failure, OpenMode, TitleMode } from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -35,6 +35,8 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
+const openMode = atom({ plugin: 'session-kanban', key: 'openMode' } as const, 'switch' as OpenMode)
+const query = atom({ plugin: 'session-kanban', key: 'query' } as const, '')
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
 const failure = atom({ plugin: 'session-kanban', key: 'failure' } as const, null as Failure | null)
 
@@ -226,6 +228,10 @@ async function refresh($: EngineInterface) {
   const outcome = await listSessions($)
   const at = await $.clock.now()
   if ('list' in outcome) {
+    const previous = await read($, cards)
+    // Stored cards outlive a reload; ones older than a few polls would announce
+    // sessions that finished long ago, so only a recent load is compared.
+    if (at - (await read($, fetchedAt)) <= FINISH_WINDOW_MS) announceFinished($, previous, outcome.list)
     await update($, cards, () => outcome.list)
     await update($, failure, () => null)
     // Only a successful load moves this, so a failure can say how old the cards are.
@@ -242,6 +248,23 @@ async function refresh($: EngineInterface) {
   }))
   const step = RETRY_STEPS_MS[Math.min((next?.attempts ?? 1) - 1, RETRY_STEPS_MS.length - 1)] ?? POLL_MS
   retryTimer = $.clock.after(step, () => void refresh($))
+}
+
+// A few polls, so one failed refresh between two loads still counts as recent.
+const FINISH_WINDOW_MS = 3 * POLL_MS
+const FINISH_TOAST_MS = 10_000
+
+// The app reports no "needs input" state; a session that stops running is the
+// nearest sign that it wants you. The board's own session and sessions that
+// stopped by being archived are left out.
+function announceFinished($: EngineInterface, previous: Card[], list: Card[]) {
+  const wasRunning = new Set(previous.filter(card => card.isRunning).map(card => card.id))
+  const finished = list.filter(card => wasRunning.has(card.id) && !card.isRunning && !card.isArchived && !card.isCurrent)
+  if (finished.length === 0) return
+  const names = finished.map(card => `"${card.title}"`).join(', ')
+  $.ui.toast(finished.length === 1 ? `Finished: ${names}` : `${finished.length} sessions finished: ${names}`, {
+    timeoutMs: FINISH_TOAST_MS,
+  })
 }
 
 async function openCard($: EngineInterface, card: Card) {
@@ -330,6 +353,9 @@ export const register: Register = on => {
     const isSquare = (await read($, cornerStyle)) === 'square' && e.surface !== 'terminal'
     const problem = await read($, failure)
     const lastFetch = await read($, fetchedAt)
+    const mode = await read($, openMode)
+    const searchText = await read($, query)
+    const needle = searchText.trim().toLowerCase()
     const now = await $.clock.now()
 
     const groups = new Map<string, string>()
@@ -344,7 +370,8 @@ export const register: Register = on => {
     const isVisible = (card: Card) =>
       (selected === 'all' || (selected === 'ungrouped' ? card.groupId === null : card.groupId === selected)) &&
       (!weekOnly || card.isRunning || now - card.lastActivityAt < WEEK_MS) &&
-      (routinesShown || known[card.id]?.isRoutine !== true)
+      (routinesShown || known[card.id]?.isRoutine !== true) &&
+      (needle === '' || [card.title, card.branch, card.groupName].some(field => field?.toLowerCase().includes(needle)))
     const visibleIds = new Set(all.filter(isVisible).map(card => card.id))
     // A sub-session rides inside its parent's card while that card is on the
     // board, its own sub-sessions under it; with the parent filtered out it
@@ -383,11 +410,28 @@ export const register: Register = on => {
     let filterControl = <Text dimColor>Section: {options.find(option => option.value === selected)?.label}</Text>
     let titleControl = <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>
     let cornerControl = <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>
+    const modeOptions = [
+      { value: 'switch', label: 'Switch session' },
+      { value: 'split', label: 'Split view' },
+      { value: 'both', label: 'Both buttons' },
+    ]
+    let openControl = <Text dimColor>Open: {modeOptions.find(option => option.value === mode)?.label}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
+    // A surface with no text field still shows what the board is filtered by.
+    let searchControl = needle === '' ? null : <Text dimColor>Search: {searchText}</Text>
     if (e.surface === 'desktop' || e.surface === 'vscode') {
-      const { Select } = $.ui.resolve(e)
+      const { Select, Input } = $.ui.resolve(e)
+      searchControl = (
+        <Input
+          key="search"
+          placeholder="Search title, branch, section"
+          value={searchText}
+          onInput={(value: string) => update($, query, () => value)}
+          onSubmit={(value: string) => update($, query, () => value)}
+        />
+      )
       countControl = (
         <Select
           key="count"
@@ -433,6 +477,15 @@ export const register: Register = on => {
           onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square'))}
         />
       )
+      openControl = (
+        <Select
+          key="open-mode"
+          label="Open"
+          options={modeOptions}
+          value={mode}
+          onSelect={value => update($, openMode, () => (value === 'split' || value === 'both' ? value : 'switch'))}
+        />
+      )
     }
 
     const icon = (key: string, glyph: string, onPress: () => unknown, isDim = true) => (
@@ -468,19 +521,48 @@ export const register: Register = on => {
       )
     }
 
+    // The app splits in only the board's own session's sub-sessions, so other
+    // cards keep the switch arrow whatever the setting.
+    const currentId = all.find(card => card.isCurrent)?.id
+    const canSplit = (card: Card) => mode !== 'switch' && currentId !== undefined && card.parentId === currentId
+    const switchTo = (card: Card) => later($, () => openCard($, card))
+    const splitIn = (card: Card) =>
+      act(
+        $,
+        'ccd_window',
+        'open_session_in',
+        { session_id: card.id, target: 'split' },
+        'Split view',
+        `Open the session "${card.title}" (${card.id}) in split view beside this one.`,
+      )
+    const openPrimary = (card: Card) => (mode === 'split' && canSplit(card) ? splitIn(card) : switchTo(card))
+
     const titleOf = (card: Card, isDim = false) =>
       isMultiline ? (
         <Text wrap="wrap" dimColor={isDim}>
           {card.title}
         </Text>
       ) : (
-        <Button key={card.id} plain dimColor={isDim} onPress={() => later($, () => openCard($, card))}>
+        <Button key={card.id} plain dimColor={isDim} onPress={() => openPrimary(card)}>
           {card.title}
         </Button>
       )
 
-    // Lucide's arrow-right as a glyph: a Button takes only text, and an Svg cannot be pressed.
-    const openIcon = (card: Card) => icon(`open-${card.id}`, '→', () => later($, () => openCard($, card)))
+    // Flat arrows as glyphs: a Button takes only text, and an Svg cannot be
+    // pressed. → switches to the session; ⇥ puts it beside this one.
+    const openIcon = (card: Card) => {
+      const switchIcon = icon(`open-${card.id}`, '→', () => switchTo(card))
+      const splitIcon = icon(`split-${card.id}`, '⇥', () => splitIn(card))
+      if (!canSplit(card)) return switchIcon
+      if (mode === 'split') return splitIcon
+
+      return (
+        <Box key={`opens-${card.id}`} flexDirection="row" gap="xs" flexShrink={0}>
+          {switchIcon}
+          {splitIcon}
+        </Box>
+      )
+    }
 
     const childrenBelow = (id: string) =>
       [...(descendantsOf.get(id) ?? [])].sort(
@@ -720,6 +802,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap="sm">
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm">
           <Box flexDirection="row" gap="sm" alignItems="center" flexWrap="wrap" flexShrink={1}>
+            {searchControl}
             {filterControl}
             {countControl}
             <Button
@@ -747,6 +830,7 @@ export const register: Register = on => {
         </Box>
         {settingsOpen && (
           <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+            {openControl}
             {titleControl}
             {cornerControl}
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}

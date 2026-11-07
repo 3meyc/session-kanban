@@ -21,6 +21,9 @@ export type TitleMode = 'ellipsis' | 'multiline'
 
 export type CornerStyle = 'square' | 'rounded'
 
+// What a card's open control does: switch to the session, show it in split view, or offer both.
+export type OpenMode = 'switch' | 'split' | 'both'
+
 // The last failed load: `offline` while the app's tools are reconnecting,
 // `error` for anything else; `since` is when the run of failures began.
 export type Failure = { kind: 'offline' | 'error'; message: string; since: number; attempts: number }
@@ -38,6 +41,8 @@ declare module 'claude-code' {
       isSettingsOpen: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle
+      openMode: OpenMode
+      query: string
       loadCount: string
       fetchedAt: number
       failure: Failure | null
