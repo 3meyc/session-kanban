@@ -275,6 +275,20 @@ async function openCard($: EngineInterface, card: Card) {
   if (ran.exitCode !== 0) $.ui.toast(`Could not open "${card.title}": ${ran.stderr.trim()}`)
 }
 
+// The surface's clipboard first; a desktop pane may have none a mod can reach,
+// so macOS's own pbcopy takes the id then.
+async function copyId($: EngineInterface, card: Card) {
+  const copied = await $.ui.copy({ text: card.id }).catch(() => ({ isCopied: false }))
+  if (!copied.isCopied) {
+    const ran = await $.process.run(['pbcopy'], { stdin: card.id }).catch(() => null)
+    if (ran?.exitCode !== 0) {
+      $.ui.toast(`Could not copy the id of "${card.title}": ${card.id}`)
+      return
+    }
+  }
+  $.ui.toast(`Copied ${card.id}`)
+}
+
 // Called inside the press itself: auto mode's classifier lets an app tool call
 // through only when it answers the person's own input, and a timer's call does
 // not. The tool may hold its reply until the person answers the app's own
@@ -645,6 +659,7 @@ export const register: Register = on => {
           {card.isPinned && pinBar(column)}
           {/* The spacer, not the title, takes the slack, so the open arrow sits right after the title. */}
           <Box flexDirection="row" alignItems="flex-start" gap="xs">
+            {icon(`copy-${card.id}`, '#', () => copyId($, card))}
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
               {titleOf(card)}
             </Box>

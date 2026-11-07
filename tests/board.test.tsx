@@ -228,6 +228,34 @@ test('a session that stops running is announced once', async ($, on) => {
   expect(toasts).toEqual(['Finished: "Long task"'])
 })
 
+test('# copies the session id, through pbcopy where the surface has no clipboard', async ($, on) => {
+  const toasts: string[] = []
+  const piped: string[] = []
+  let canCopy = true
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.copy', () => ({ value: canCopy ? { isCopied: true } : { isCopied: false, reason: 'no-clipboard' } }))
+  on('process.run', (_, e) => {
+    piped.push(`${e.argv.join(' ')} < ${e.init?.stdin}`)
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'copy-local_a' })
+  expect(toasts).toEqual(['Copied local_a'])
+  expect(piped).toEqual([])
+  canCopy = false
+  await ui.press({ key: 'copy-local_b' })
+  expect(piped).toEqual(['pbcopy < local_b'])
+  expect(toasts).toEqual(['Copied local_a', 'Copied local_b'])
+  await ui.unmount()
+})
+
 test('the search box keeps matching cards and a matching sub-session', async ($, on) => {
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.command.run(RUN_KANBAN)
