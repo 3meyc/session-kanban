@@ -20,6 +20,9 @@ export type Detail = { isRoutine: boolean; createdAt: number }
 export type TitleMode = 'ellipsis' | 'multiline'
 
 export type CornerStyle = 'square' | 'rounded'
+
+// Status columns side by side, or the same sections stacked in one column.
+export type LayoutMode = 'columns' | 'stacked'
 // The last failed load: `offline` while the app's tools are reconnecting,
 // `error` for anything else; `since` is when the run of failures began.
 export type Failure = { kind: 'offline' | 'error'; message: string; since: number; attempts: number }
@@ -37,6 +40,7 @@ declare module 'claude-code' {
       isSettingsOpen: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle
+      layoutMode: LayoutMode
       query: string
       loadCount: string
       fetchedAt: number

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Card, CornerStyle, Detail, Failure, TitleMode } from '../types'
+import type { Card, CornerStyle, Detail, Failure, LayoutMode, TitleMode } from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -35,6 +35,7 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
+const layoutMode = atom({ plugin: 'session-kanban', key: 'layoutMode' } as const, 'columns' as LayoutMode)
 const query = atom({ plugin: 'session-kanban', key: 'query' } as const, '')
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
 const failure = atom({ plugin: 'session-kanban', key: 'failure' } as const, null as Failure | null)
@@ -366,6 +367,7 @@ export const register: Register = on => {
     const isSquare = (await read($, cornerStyle)) === 'square' && e.surface !== 'terminal'
     const problem = await read($, failure)
     const lastFetch = await read($, fetchedAt)
+    const isStacked = (await read($, layoutMode)) === 'stacked'
     const searchText = await read($, query)
     const needle = searchText.trim().toLowerCase()
     const now = await $.clock.now()
@@ -422,6 +424,7 @@ export const register: Register = on => {
     let filterControl = <Text dimColor>Section: {options.find(option => option.value === selected)?.label}</Text>
     let titleControl = <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>
     let cornerControl = <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>
+    let layoutControl = <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -481,6 +484,18 @@ export const register: Register = on => {
           ]}
           value={isSquare ? 'square' : 'rounded'}
           onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square'))}
+        />
+      )
+      layoutControl = (
+        <Select
+          key="layout"
+          label="Layout"
+          options={[
+            { value: 'columns', label: 'Columns' },
+            { value: 'stacked', label: 'Stacked' },
+          ]}
+          value={isStacked ? 'stacked' : 'columns'}
+          onSelect={value => update($, layoutMode, () => (value === 'stacked' ? 'stacked' : 'columns'))}
         />
       )
     }
@@ -712,10 +727,7 @@ export const register: Register = on => {
         <Box
           key={`col-${column.key}`}
           flexDirection="column"
-          flexGrow={1}
-          flexShrink={1}
-          width={0}
-          minWidth={MIN_COLUMN_WIDTH}
+          {...(isStacked ? {} : { flexGrow: 1, flexShrink: 1, width: 0, minWidth: MIN_COLUMN_WIDTH })}
           gap="xs"
           padding={1}
           {...columnLook(column)}
@@ -724,7 +736,8 @@ export const register: Register = on => {
             <Text bold color={column.color}>
               {column.title} <Text dimColor>{inColumn.length}</Text>
             </Text>
-            {collapse && arrow(column, `collapse-${column.key}`, column === ARCHIVED ? '❯' : '❮', collapse)}
+            {collapse &&
+              arrow(column, `collapse-${column.key}`, isStacked ? '▾' : column === ARCHIVED ? '❯' : '❮', collapse)}
           </Box>
           {inColumn.length === 0 && <Text dimColor>—</Text>}
           {inColumn.slice(0, cap).map(card => cardBox(card, column))}
@@ -733,25 +746,42 @@ export const register: Register = on => {
       )
     }
 
-    const rail = (column: Column, glyph: string, count: number | null, expand: () => unknown) => (
-      <Box
-        key={`rail-${column.key}`}
-        flexDirection="column"
-        alignItems="center"
-        flexShrink={0}
-        width={RAIL_WIDTH}
-        paddingY={1}
-        gap="xs"
-        {...columnLook(column)}
-      >
-        {arrow(column, `expand-${column.key}`, glyph, expand)}
-        {count !== null && (
-          <Text dimColor size="caption">
-            {count}
+    // Stacked, a collapsed section is a thin bar across the board with its title, not a rail.
+    const rail = (column: Column, glyph: string, count: number | null, expand: () => unknown) =>
+      isStacked ? (
+        <Box
+          key={`rail-${column.key}`}
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="space-between"
+          paddingX={1}
+          paddingY="xs"
+          {...columnLook(column)}
+        >
+          <Text bold color={column.color}>
+            {column.title} <Text dimColor>{count ?? 0}</Text>
           </Text>
-        )}
-      </Box>
-    )
+          {arrow(column, `expand-${column.key}`, '▸', expand)}
+        </Box>
+      ) : (
+        <Box
+          key={`rail-${column.key}`}
+          flexDirection="column"
+          alignItems="center"
+          flexShrink={0}
+          width={RAIL_WIDTH}
+          paddingY={1}
+          gap="xs"
+          {...columnLook(column)}
+        >
+          {arrow(column, `expand-${column.key}`, glyph, expand)}
+          {count !== null && (
+            <Text dimColor size="caption">
+              {count}
+            </Text>
+          )}
+        </Box>
+      )
 
     const progressCount = cardsIn(PROGRESS).length
     const archivedCount = cardsIn(ARCHIVED).length
@@ -803,6 +833,7 @@ export const register: Register = on => {
         </Box>
         {settingsOpen && (
           <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+            {layoutControl}
             {titleControl}
             {cornerControl}
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
@@ -823,7 +854,12 @@ export const register: Register = on => {
             </Text>
           </Box>
         )}
-        <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="stretch">
+        <Box
+          flexDirection={isStacked ? 'column' : 'row'}
+          flexWrap={isStacked ? undefined : 'wrap'}
+          gap="sm"
+          alignItems="stretch"
+        >
           {progressCount > 0
             ? fullColumn(PROGRESS)
             : progressOpen

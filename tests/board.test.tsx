@@ -256,6 +256,25 @@ test('# copies the session id, through pbcopy where the surface has no clipboard
   await ui.unmount()
 })
 
+test('stacked layout keeps the sections, with collapsed ones as titled bars', async ($, on) => {
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'layout', value: 'stacked' })
+  // A collapsed section is a bar that names itself, unlike a rail.
+  expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 0')
+  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1')
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  await ui.press({ key: 'expand-archived' })
+  expect(await ui.find({ key: 'local_d' })).toBeDefined()
+  await ui.press({ key: 'collapse-archived' })
+  expect(await ui.find({ key: 'local_d' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('the search box keeps matching cards and a matching sub-session', async ($, on) => {
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.command.run(RUN_KANBAN)
