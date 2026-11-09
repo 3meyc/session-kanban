@@ -238,7 +238,7 @@ test('# copies the session id, through pbcopy where the surface has no clipboard
   })
   on('ui.copy', () => ({ value: canCopy ? { isCopied: true } : { isCopied: false, reason: 'no-clipboard' } }))
   on('process.run', (_, e) => {
-    piped.push(`${e.argv.join(' ')} < ${e.init?.stdin}`)
+    if (e.argv[0] === 'pbcopy') piped.push(`${e.argv.join(' ')} < ${e.init?.stdin}`)
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   const { clock } = engine(on, JSON.stringify(SESSIONS))
@@ -344,5 +344,30 @@ test('any other failure shows the banner at once, with its details', async ($, o
   expect(await ui.find({ type: 'Text', text: 'The app could not list your sessions' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Error: permission denied' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Refresh failed · no data yet/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a session with background tasks still running shows as in progress', async ($, on) => {
+  let busy = 'local_a 2\n'
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('process.run', (_, e) => ({
+    value: { exitCode: 0, stdout: e.argv[0] === '/bin/sh' ? busy : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 1')
+  expect(await ui.find({ key: 'local_a' })).toBeDefined()
+  // When the last task ends the session counts as finished, like any other.
+  busy = ''
+  await clock.advance(30_000)
+  expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
+  expect(toasts).toEqual(['Finished: "Logging"'])
   await ui.unmount()
 })

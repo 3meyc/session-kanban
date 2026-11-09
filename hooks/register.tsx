@@ -173,8 +173,24 @@ async function listSessions($: EngineInterface): Promise<{ list: Card[] } | { pr
   if ('list' in recent) for (const card of recent.list) if (!byId.has(card.id)) byId.set(card.id, card)
   const current = await currentSession($)
   if (current) byId.set(current.id, current)
+  for (const id of await backgroundBusy($)) {
+    const card = byId.get(id)
+    if (card && !card.isRunning && !card.isArchived) byId.set(id, { ...card, isRunning: true })
+  }
 
   return { list: [...byId.values()] }
+}
+
+// The app counts a session as running only while it takes a turn, not while
+// shells or agents it sent to the background still run. The script reads those
+// from each live session's own records and prints "<session id> <count>".
+async function backgroundBusy($: EngineInterface): Promise<string[]> {
+  const ran = await $.process.run(['/bin/sh', `${$.plugin.root}/hooks/background-tasks.sh`]).catch(() => null)
+  if (!ran || ran.exitCode !== 0) return []
+  return ran.stdout
+    .split('\n')
+    .map(line => line.split(' ')[0] ?? '')
+    .filter(id => id.startsWith('local_'))
 }
 
 // list_sessions leaves out the session that asks, which is the one this board

@@ -3,6 +3,7 @@
 A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pane beside the chat, instead of the sidebar's tree.
 
 - **Columns by status:** In progress, Today, Earlier, Archived, each on a pale tint of its colour.
+- **Background work counts as running:** a session whose background shells or agents are still at work stays in In progress with a green dot, though the app shows it as idle once its turn ends.
 - **Collapsible sections:** every section collapses to a thin rail (or a bar in the stacked layout) with its count. In progress starts collapsed when nothing is running, Archived starts collapsed, and Today and Earlier start open.
 - **Cards:** a `#` button that copies the session id, the title with an open arrow (`→`), the sidebar section as a tag, time since last activity and branch underneath (selectable, so the branch can be copied), and a footer with Pin/Unpin and Archive, or Delete and Unarchive on archived cards.
 - **Pinned sessions** sort to the top of their column and carry a thin coloured bar on the left.
@@ -52,6 +53,7 @@ The pane opens when a session starts. Reopen it any time with:
 - **No "needs input" status:** the app's session list does not report whether a session is waiting for you.
 - **No split view from the board:** the app shows a session beside another only if that session started it, so the board only switches to a session. To split, right-click a session in the sidebar and choose Open in → Split view.
 - **Finished toasts have no Open button:** toasts carry text only.
+- **Background work is read from local files:** the board looks at each live session's own records under `~/.claude` (with `/bin/sh`, `grep` and `awk`), so it sees background shells and agents of sessions on this Mac only, not of remote or cloud sessions.
 - **Routines** are recognised by looking each session up once; on a first load an older routine run can show for a minute until its lookup returns.
 - **Icons are Unicode characters:** buttons take only text, so icon sets such as Lucide cannot be used on them.
 
