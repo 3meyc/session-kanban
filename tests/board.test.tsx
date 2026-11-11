@@ -371,3 +371,20 @@ test('a session with background tasks still running shows as in progress', async
   expect(toasts).toEqual(['Finished: "Logging"'])
   await ui.unmount()
 })
+
+test('/kanban closes a shown board and opens a hidden one', async ($, on) => {
+  let shown = true
+  const closed: string[] = []
+  on('ui.panes', () => ({ value: [{ id: 'session-kanban', title: 'Sessions board', isShown: shown, isFocused: false, isPlaced: true }] }))
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
+  engine(on, JSON.stringify(SESSIONS))
+  expect((await $.command.run(RUN_KANBAN))?.text).toBe('Sessions board closed.')
+  expect(closed).toEqual(['session-kanban'])
+  // Behind another tab it is brought forward, not closed.
+  shown = false
+  expect((await $.command.run(RUN_KANBAN))?.text).toBe('Sessions board opened.')
+  expect(closed).toEqual(['session-kanban'])
+})

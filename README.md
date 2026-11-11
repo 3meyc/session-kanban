@@ -40,11 +40,13 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 
 ## Use
 
-The pane opens when a session starts. Reopen it any time with:
+The pane opens when a session starts. `/kanban` toggles it: it closes the board when it is showing, and opens it (or brings it forward from behind another tab) otherwise.
 
 ```
 /kanban
 ```
+
+The app's toolbar takes no buttons from mods, so the command is the toggle.
 
 ## Limits
 

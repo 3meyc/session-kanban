@@ -365,7 +365,14 @@ export const register: Register = on => {
     return started
   })
 
+  // A toggle, since the app has no toolbar a mod can add a button to. A board
+  // behind another tab is brought forward rather than closed.
   on('command.run', { command: 'kanban' }, async $ => {
+    const panes = await $.ui.panes().catch(() => [])
+    if (panes.some(pane => pane.id === PANE && pane.isShown)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'Sessions board closed.' }
+    }
     await $.ui.open({ id: PANE, title: TITLE })
     later($, () => refresh($))
 
