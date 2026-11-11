@@ -10,7 +10,7 @@ A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pa
 - **The session you are in** (the one the board runs in) is filled in a stronger shade of its column, as a card or as a sub-session line.
 - **Sub-sessions** (sessions Claude started from another, or forks) are listed inside their parent's card as a task list; archived ones show only while the Archived column is open, and the sub-sessions of a hidden one move up a level, so a running one is never hidden.
 - **Toolbar:** a search box (title, branch or section), filter by sidebar section, how many sessions to load (25, 50, 100, All), This week, Show routines (routine runs are tagged with their run date), Refresh.
-- **Settings:** layout (status columns side by side, or stacked in one column with In progress on top); titles on one line or multiline; square or rounded cards.
+- **Settings:** layout (stacked in one column with In progress on top, the default, or status columns side by side); titles on one line or multiline; square or rounded cards.
 - **Finished toasts:** when a session stops running, the board shows a toast naming it.
 
 The board refreshes every 30 seconds.

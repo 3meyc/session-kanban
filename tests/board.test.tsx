@@ -65,6 +65,9 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'layout', value: 'columns' })
+  await ui.press({ key: 'settings' })
   // Nothing runs, so In progress is a rail with no title; Archived is a rail with its count.
   expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
   expect(await ui.find({ key: 'expand-progress' })).toBeDefined()
@@ -262,8 +265,7 @@ test('stacked layout keeps the sections, with collapsed ones as titled bars', as
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'settings' })
-  await ui.select({ key: 'layout', value: 'stacked' })
+  // Stacked is the default layout, so nothing is picked in Settings.
   // A collapsed section is a bar that names itself, unlike a rail.
   expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 0')
   expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1')
@@ -367,7 +369,7 @@ test('a session with background tasks still running shows as in progress', async
   // When the last task ends the session counts as finished, like any other.
   busy = ''
   await clock.advance(30_000)
-  expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 0')
   expect(toasts).toEqual(['Finished: "Logging"'])
   await ui.unmount()
 })
