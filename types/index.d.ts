@@ -36,6 +36,7 @@ declare module 'claude-code' {
       isThisWeek: boolean
       isRoutinesShown: boolean
       isArchivedOpen: boolean
+      archivedShownIn: Record<string, boolean>
       openSections: Record<string, boolean>
       isSettingsOpen: boolean
       titleMode: TitleMode

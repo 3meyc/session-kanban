@@ -30,6 +30,8 @@ const filter = atom({ plugin: 'session-kanban', key: 'filter' } as const, 'all')
 const isThisWeek = atom({ plugin: 'session-kanban', key: 'isThisWeek' } as const, false)
 const isRoutinesShown = atom({ plugin: 'session-kanban', key: 'isRoutinesShown' } as const, false)
 const isArchivedOpen = atom({ plugin: 'session-kanban', key: 'isArchivedOpen' } as const, false)
+// The cards whose archived sub-sessions someone chose to see, by card id.
+const archivedShownIn = atom({ plugin: 'session-kanban', key: 'archivedShownIn' } as const, {} as Record<string, boolean>)
 // Only the sections someone opened or closed by hand; the rest follow their default.
 const openSections = atom({ plugin: 'session-kanban', key: 'openSections' } as const, {} as Record<string, boolean>)
 const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } as const, false)
@@ -409,6 +411,7 @@ export const register: Register = on => {
     const weekOnly = await read($, isThisWeek)
     const routinesShown = await read($, isRoutinesShown)
     const archivedOpen = await read($, isArchivedOpen)
+    const shownIn = await read($, archivedShownIn)
     const openedByHand = await read($, openSections)
     const settingsOpen = await read($, isSettingsOpen)
     const isMultiline = (await read($, titleMode)) === 'multiline'
@@ -615,24 +618,23 @@ export const register: Register = on => {
       childrenBelow(id).flatMap(child =>
         seen.has(child.id) ? [] : [child, ...familyOf(child.id, seen.add(child.id))],
       )
-    // Archived sub-sessions follow the Archived column: listed only while it is open.
-    const isListed = (sub: Card) => archivedOpen || !sub.isArchived
-    // A hidden archived sub-session hands its own sub-sessions up to the nearest
-    // listed ancestor, as the sidebar does, so a running one is never hidden.
-    const listedBelow = (id: string, seen: Set<string>): Card[] =>
+    // Archived sub-sessions are listed only in a card whose "Show archived" is on.
+    // A hidden one hands its own sub-sessions up to the nearest listed ancestor,
+    // as the sidebar does, so a running one is never hidden.
+    const listedBelow = (id: string, seen: Set<string>, showsArchived: boolean): Card[] =>
       childrenBelow(id)
         .flatMap(child => {
           if (seen.has(child.id)) return []
           seen.add(child.id)
-          return isListed(child) ? [child] : listedBelow(child.id, seen)
+          return showsArchived || !child.isArchived ? [child] : listedBelow(child.id, seen, showsArchived)
         })
         .sort((a, b) => Number(a.isArchived) - Number(b.isArchived) || b.lastActivityAt - a.lastActivityAt)
 
     // A sub-session's own sub-sessions sit under it, one indent deeper.
-    const subTree = (sub: Card, seen: Set<string>, column: Column): RenderElement => {
+    const subTree = (sub: Card, seen: Set<string>, column: Column, showsArchived: boolean): RenderElement => {
       const marker = sub.isArchived ? '✓' : sub.isRunning ? '●' : '○'
       const color = sub.isArchived ? 'inactive' : sub.isRunning ? 'success' : 'subtle'
-      const below = listedBelow(sub.id, seen)
+      const below = listedBelow(sub.id, seen, showsArchived)
 
       return (
         <Box key={`sub-${sub.id}`} flexDirection="column">
@@ -652,15 +654,23 @@ export const register: Register = on => {
           </Box>
           {below.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
-              {below.map(child => subTree(child, seen, column))}
+              {below.map(child => subTree(child, seen, column, showsArchived))}
             </Box>
           )}
         </Box>
       )
     }
 
-    const footerOf = (card: Card) => {
+    const footerOf = (card: Card, archivedBelow: number, showsArchived: boolean) => {
       const named = `the session "${card.title}" (${card.id})`
+      const archivedToggle =
+        archivedBelow > 0
+          ? [
+              action(`archived-${card.id}`, showsArchived ? 'Hide archived' : `Show ${archivedBelow} archived`, () =>
+                update($, archivedShownIn, current => ({ ...current, [card.id]: !showsArchived })),
+              ),
+            ]
+          : []
       const pinVerb = card.isPinned ? 'Unpin' : 'Pin'
       const left = card.isArchived
         ? [
@@ -704,7 +714,10 @@ export const register: Register = on => {
       return (
         <Box key={`foot-${card.id}`} flexDirection="row" justifyContent="space-between" alignItems="center" marginTop="sm">
           <Box flexDirection="row" gap="xs">{left}</Box>
-          <Box flexDirection="row" gap="xs">{right}</Box>
+          <Box flexDirection="row" gap="xs">
+            {archivedToggle}
+            {right}
+          </Box>
         </Box>
       )
     }
@@ -716,7 +729,8 @@ export const register: Register = on => {
       const subs = familyOf(card.id, new Set([card.id]))
       const doneCount = subs.filter(sub => sub.isArchived).length
       const seen = new Set([card.id])
-      const firstLevel = listedBelow(card.id, seen)
+      const showsArchived = shownIn[card.id] === true
+      const firstLevel = listedBelow(card.id, seen, showsArchived)
 
       return (
         <Box
@@ -760,10 +774,10 @@ export const register: Register = on => {
                 Sub-sessions: {subs.length}
                 {doneCount > 0 ? ` (${doneCount} archived)` : ''}
               </Text>
-              {firstLevel.map(sub => subTree(sub, seen, column))}
+              {firstLevel.map(sub => subTree(sub, seen, column, showsArchived))}
             </Box>
           )}
-          {footerOf(card)}
+          {footerOf(card, doneCount, showsArchived)}
         </Box>
       )
     }

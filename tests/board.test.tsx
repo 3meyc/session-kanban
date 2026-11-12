@@ -87,7 +87,7 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   expect((await ui.find({ key: 'pin-local_b' }))?.text).toBe('Unpin')
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Local tools' })).toBeDefined()
-  // The archived sub-session is counted in its parent but listed only with Archived open.
+  // The archived sub-session is counted in its parent but listed only on its card's "Show archived".
   expect(await ui.find({ key: 'local_e' })).toBeUndefined()
   expect(await ui.find({ key: 'card-local_e' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Sub-sessions: 1 (1 archived)' })).toBeDefined()
@@ -98,8 +98,15 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   expect(await ui.find({ key: 'local_r' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '03.11.26' })).toBeDefined()
 
+  // Opening the Archived column leaves a card's archived sub-sessions as they were.
   await ui.press({ key: 'expand-archived' })
+  expect(await ui.find({ key: 'local_e' })).toBeUndefined()
+  expect((await ui.find({ key: 'archived-local_a' }))?.text).toBe('Show 1 archived')
+  await ui.press({ key: 'archived-local_a' })
   expect(await ui.find({ key: 'local_e' })).toBeDefined()
+  expect((await ui.find({ key: 'archived-local_a' }))?.text).toBe('Hide archived')
+  await ui.press({ key: 'archived-local_a' })
+  expect(await ui.find({ key: 'local_e' })).toBeUndefined()
   expect(await ui.find({ key: 'local_d' })).toBeDefined()
   expect(await ui.find({ key: 'unarchive-local_d' })).toBeDefined()
   await ui.press({ key: 'delete-local_d' })
@@ -199,12 +206,12 @@ test('sub-sessions of a hidden archived sub-session move up to the card', async 
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  // With Archived closed the archived child is hidden, but its running child still shows.
+  // With archived ones hidden the archived child is gone, but its running child still shows.
   expect(await ui.find({ key: 'local_k' })).toBeUndefined()
   expect(await ui.find({ key: 'local_g' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Sub-sessions: 2 (1 archived)' })).toBeDefined()
-  // With Archived open the tree is whole again, the grandchild under its own parent.
-  await ui.press({ key: 'expand-archived' })
+  // Shown, the tree is whole again, the grandchild under its own parent.
+  await ui.press({ key: 'archived-local_p' })
   expect(await ui.find({ key: 'local_k' })).toBeDefined()
   expect(await ui.find({ key: 'local_g' })).toBeDefined()
   await ui.unmount()
