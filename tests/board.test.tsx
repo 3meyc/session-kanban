@@ -72,7 +72,7 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
   expect(await ui.find({ key: 'expand-progress' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Archived/ })).toBeUndefined()
-  expect((await ui.find({ type: 'Text', text: /^1$/ }))?.text).toBe('1')
+  expect((await ui.find({ type: 'Text', text: /^2$/ }))?.text).toBe('2')
 
   expect((await ui.find({ key: 'local_a' }))?.text).toBe('Logging')
   expect((await ui.find({ key: 'local_s' }))?.text).toBe('Board work')
@@ -268,7 +268,7 @@ test('stacked layout keeps the sections, with collapsed ones as titled bars', as
   // Stacked is the default layout, so nothing is picked in Settings.
   // A collapsed section is a bar that names itself, unlike a rail.
   expect((await ui.find({ type: 'Text', text: /^In progress/ }))?.text).toBe('In progress 0')
-  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1')
+  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1 · 1 sub-session')
   expect(await ui.find({ key: 'local_a' })).toBeDefined()
   await ui.press({ key: 'expand-archived' })
   expect(await ui.find({ key: 'local_d' })).toBeDefined()
@@ -410,7 +410,7 @@ test('archived sessions behind many archived sub-sessions still reach the Archiv
   // 25 rows hold only the parent and its sub-sessions, so the list is asked again wider.
   expect(asked).toEqual([25, 50])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1')
+  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1 · 30 sub-sessions')
   await ui.press({ key: 'expand-archived' })
   expect(await ui.find({ key: 'local_old' })).toBeDefined()
   await ui.unmount()

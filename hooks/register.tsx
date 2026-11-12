@@ -456,6 +456,14 @@ export const register: Register = on => {
       topLevel
         .filter(card => column.pick(card, now))
         .sort((a, b) => Number(b.isPinned) - Number(a.isPinned) || b.lastActivityAt - a.lastActivityAt)
+    // Archived sub-sessions ride inside their parents' cards, often in another
+    // column, so Archived names them beside its own count.
+    const topLevelIds = new Set(topLevel.map(card => card.id))
+    const archivedInside = all.filter(card => card.isArchived && isVisible(card) && !topLevelIds.has(card.id)).length
+    const sectionCount = (column: Column, count: number) =>
+      column === ARCHIVED && archivedInside > 0
+        ? `${count} · ${archivedInside} sub-session${archivedInside === 1 ? '' : 's'}`
+        : String(count)
 
     // A terminal cannot blend alpha hex, so there a column keeps a coloured border instead.
     const isPainted = e.surface !== 'terminal'
@@ -784,12 +792,14 @@ export const register: Register = on => {
         >
           <Box flexDirection="row" justifyContent="space-between" alignItems="center">
             <Text bold color={column.color}>
-              {column.title} <Text dimColor>{inColumn.length}</Text>
+              {column.title} <Text dimColor>{sectionCount(column, inColumn.length)}</Text>
             </Text>
             {collapse &&
               arrow(column, `collapse-${column.key}`, isStacked ? STACKED_OPEN : column === ARCHIVED ? '❯' : '❮', collapse)}
           </Box>
-          {inColumn.length === 0 && <Text dimColor>—</Text>}
+          {inColumn.length === 0 && (
+            <Text dimColor>{column === ARCHIVED && archivedInside > 0 ? 'Archived sub-sessions are listed in their parents’ cards.' : '—'}</Text>
+          )}
           {inColumn.slice(0, cap).map(card => cardBox(card, column))}
           {inColumn.length > cap && <Text dimColor>+{inColumn.length - cap} more</Text>}
         </Box>
@@ -809,7 +819,7 @@ export const register: Register = on => {
           {...columnLook(column)}
         >
           <Text bold color={column.color}>
-            {column.title} <Text dimColor>{count ?? 0}</Text>
+            {column.title} <Text dimColor>{sectionCount(column, count ?? 0)}</Text>
           </Text>
           {arrow(column, `expand-${column.key}`, STACKED_CLOSED, expand)}
         </Box>
@@ -827,7 +837,7 @@ export const register: Register = on => {
           {arrow(column, `expand-${column.key}`, glyph, expand)}
           {count !== null && (
             <Text dimColor size="caption">
-              {count}
+              {column === ARCHIVED ? count + archivedInside : count}
             </Text>
           )}
         </Box>
