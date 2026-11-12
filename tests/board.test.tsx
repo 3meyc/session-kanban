@@ -34,7 +34,7 @@ type On = Parameters<TestBody>[1]
 const RUN_KANBAN = { command: 'kanban', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } } as const
 
 // `listReply` is a function where a test changes the reply between refreshes.
-function engine(on: On, listReply: string | (() => string)) {
+function engine(on: On, listReply: string | ((args: Record<string, unknown>) => string)) {
   const calls: string[] = []
   const clock = mock.clock(on, { now: NOW })
   on('command.register', () => ({ value: { command: 'kanban' } }))
@@ -45,7 +45,7 @@ function engine(on: On, listReply: string | (() => string)) {
     const id = String(e.args.session_id ?? '')
     const text =
       e.tool === 'list_sessions'
-        ? typeof listReply === 'function' ? listReply() : listReply
+        ? typeof listReply === 'function' ? listReply(e.args) : listReply
         : e.tool === 'get_session' && id === 'self'
           ? JSON.stringify(CURRENT)
           : e.tool === 'get_session'
@@ -389,4 +389,29 @@ test('/kanban closes a shown board and opens a hidden one', async ($, on) => {
   shown = false
   expect((await $.command.run(RUN_KANBAN))?.text).toBe('Sessions board opened.')
   expect(closed).toEqual(['session-kanban'])
+})
+
+test('archived sessions behind many archived sub-sessions still reach the Archived column', async ($, on) => {
+  const parent = { sessionId: 'local_p', title: 'Busy parent', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_p' }
+  const subs = Array.from({ length: 30 }, (_, i) => ({
+    sessionId: `local_sub${i}`, title: `Sub ${i}`, startedBy: 'local_p', isRunning: false, isArchived: true,
+    lastActivityAt: new Date(Date.parse('2026-11-03T11:00:00Z') - i * 60_000).toISOString(), group: null, link: `claude://x/local_sub${i}`,
+  }))
+  const old = { sessionId: 'local_old', title: 'Old archived', isRunning: false, isArchived: true, lastActivityAt: '2026-11-02T07:00:00Z', group: null, link: 'claude://x/local_old' }
+  const asked: number[] = []
+  const { clock } = engine(on, args => {
+    if (args.include_archived !== true) return JSON.stringify([parent])
+    asked.push(Number(args.limit))
+    return JSON.stringify([parent, ...subs, old].slice(0, Number(args.limit)))
+  })
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  // 25 rows hold only the parent and its sub-sessions, so the list is asked again wider.
+  expect(asked).toEqual([25, 50])
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^Archived/ }))?.text).toBe('Archived 1')
+  await ui.press({ key: 'expand-archived' })
+  expect(await ui.find({ key: 'local_old' })).toBeDefined()
+  await ui.unmount()
 })

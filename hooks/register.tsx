@@ -168,7 +168,7 @@ async function listSessions($: EngineInterface): Promise<{ list: Card[] } | { pr
   const limit = chosen === 'all' ? ALL_LIMIT : Number(chosen) || DEFAULT_COUNT
   const active = await fetchList($, {}, limit)
   if ('problem' in active) return active
-  const recent = await fetchList($, { include_archived: true }, limit)
+  const recent = await fetchArchived($, limit)
   const byId = new Map(active.list.map(card => [card.id, card]))
   if ('list' in recent) for (const card of recent.list) if (!byId.has(card.id)) byId.set(card.id, card)
   const current = await currentSession($)
@@ -191,6 +191,28 @@ async function backgroundBusy($: EngineInterface): Promise<string[]> {
     .split('\n')
     .map(line => line.split(' ')[0] ?? '')
     .filter(id => id.startsWith('local_'))
+}
+
+// How far the archived list may widen: up to this many times the chosen count.
+const ARCHIVED_REACH = 8
+
+// The archived list mixes active and archived sessions, newest first, and a
+// parent that starts many sub-sessions fills it with them: those ride inside
+// their parent's card, so the Archived column stayed empty. The list has no
+// offset, so it is asked again twice as long until it holds `limit` archived
+// sessions that stand as cards of their own, or ends, or stops growing.
+async function fetchArchived($: EngineInterface, limit: number): Promise<{ list: Card[] } | { problem: string }> {
+  let outcome = await fetchList($, { include_archived: true }, limit)
+  for (let ask = limit * 2; 'list' in outcome && ask <= limit * ARCHIVED_REACH; ask *= 2) {
+    const ids = new Set(outcome.list.map(card => card.id))
+    const ownCards = outcome.list.filter(card => card.isArchived && !(card.parentId && ids.has(card.parentId)))
+    if (ownCards.length >= limit || outcome.list.length < ask / 2) break
+    const wider = await fetchList($, { include_archived: true }, ask)
+    if (!('list' in wider) || wider.list.length <= outcome.list.length) break
+    outcome = wider
+  }
+
+  return outcome
 }
 
 // list_sessions leaves out the session that asks, which is the one this board
