@@ -449,3 +449,24 @@ test('a sub-session neither opens the board nor polls until /kanban', async ($, 
   await clock.advance(30_000)
   expect(calls.filter(tool => tool === 'list_sessions').length).toBeGreaterThan(listed)
 })
+
+test('with "In sub-sessions: Open" a sub-session opens the board too', async ($, on) => {
+  const sub = { ...CURRENT, startedBy: 'local_a' }
+  const stored = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: stored.get(e.key) }))
+  on('store.set', (_, e) => {
+    stored.set(e.key, e.value)
+    return { value: undefined }
+  })
+  const { clock, opens } = engine(on, JSON.stringify(SESSIONS), sub)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings' })
+  expect((await ui.find({ key: 'open-in-subs' }))?.props.value).toBe('closed')
+  await ui.select({ key: 'open-in-subs', value: 'open' })
+  await ui.unmount()
+  // Kept in the store, so it reaches sessions started later.
+  expect(stored.get('isOpenInSubs')).toBe(true)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+  expect(opens).toEqual(['session-kanban'])
+})

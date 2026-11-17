@@ -41,6 +41,7 @@ declare module 'claude-code' {
       isSettingsOpen: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle
+      isOpenInSubs: boolean
       layoutMode: LayoutMode
       query: string
       loadCount: string

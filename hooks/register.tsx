@@ -38,6 +38,10 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
+// Plugin state lives for one session, and this choice must reach sessions not
+// yet started, so it is kept in the plugin's store and mirrored here to draw.
+const isOpenInSubs = atom({ plugin: 'session-kanban', key: 'isOpenInSubs' } as const, false)
+const OPEN_IN_SUBS_KEY = 'isOpenInSubs'
 const layoutMode = atom({ plugin: 'session-kanban', key: 'layoutMode' } as const, 'stacked' as LayoutMode)
 const query = atom({ plugin: 'session-kanban', key: 'query' } as const, '')
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
@@ -275,11 +279,12 @@ function startPolling($: EngineInterface) {
   pollTimer ??= $.clock.every(POLL_MS, () => void refresh($))
 }
 
-// The board opens by itself in root sessions only: a sub-session has a parent
-// whose board shows it already, and there it polls only once /kanban opens it.
-function settleAutoOpen($: EngineInterface, list: Card[]) {
+// The board opens by itself in root sessions, and in sub-sessions only when
+// Settings say so: a sub-session's parent shows it already, so by default it
+// stays closed there and polls only once /kanban opens it.
+async function settleAutoOpen($: EngineInterface, list: Card[]) {
   isAutoOpenPending = false
-  if (list.find(card => card.isCurrent)?.parentId) {
+  if (list.find(card => card.isCurrent)?.parentId && (await $.store.get(OPEN_IN_SUBS_KEY).catch(() => false)) !== true) {
     pollTimer?.cancel()
     pollTimer = null
     return
@@ -298,7 +303,7 @@ async function refresh($: EngineInterface) {
     // sessions that finished long ago, so only a recent load is compared.
     if (at - (await read($, fetchedAt)) <= FINISH_WINDOW_MS) announceFinished($, previous, outcome.list)
     await update($, cards, () => outcome.list)
-    if (isAutoOpenPending) settleAutoOpen($, outcome.list)
+    if (isAutoOpenPending) await settleAutoOpen($, outcome.list)
     await update($, failure, () => null)
     // Only a successful load moves this, so a failure can say how old the cards are.
     await update($, fetchedAt, () => at)
@@ -404,6 +409,7 @@ export const register: Register = on => {
       description: 'Show your Code-tab sessions as a Kanban board in a pane',
     })
     isAutoOpenPending = true
+    if ((await $.store.get(OPEN_IN_SUBS_KEY).catch(() => false)) === true) await update($, isOpenInSubs, () => true)
     startPolling($)
     void refresh($)
 
@@ -508,6 +514,8 @@ export const register: Register = on => {
     let titleControl = <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>
     let cornerControl = <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>
     let layoutControl = <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>
+    const opensInSubs = await read($, isOpenInSubs)
+    let subsControl = <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -555,6 +563,21 @@ export const register: Register = on => {
           ]}
           value={isMultiline ? 'multiline' : 'ellipsis'}
           onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis'))}
+        />
+      )
+      subsControl = (
+        <Select
+          key="open-in-subs"
+          label="In sub-sessions"
+          options={[
+            { value: 'closed', label: 'Stay closed' },
+            { value: 'open', label: 'Open' },
+          ]}
+          value={opensInSubs ? 'open' : 'closed'}
+          onSelect={value => {
+            void update($, isOpenInSubs, () => value === 'open')
+            void $.store.set(OPEN_IN_SUBS_KEY, value === 'open').catch(() => undefined)
+          }}
         />
       )
       cornerControl = (
@@ -941,6 +964,7 @@ export const register: Register = on => {
             {layoutControl}
             {titleControl}
             {cornerControl}
+            {subsControl}
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
           </Box>
         )}
