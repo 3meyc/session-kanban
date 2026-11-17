@@ -450,14 +450,21 @@ test('a sub-session neither opens the board nor polls until /kanban', async ($, 
   expect(calls.filter(tool => tool === 'list_sessions').length).toBeGreaterThan(listed)
 })
 
-test('with "In sub-sessions: Open" a sub-session opens the board too', async ($, on) => {
-  const sub = { ...CURRENT, startedBy: 'local_a' }
-  const stored = new Map<string, unknown>()
+// The plugin's store, which outlives a session, as a map a test can preload and read.
+function store(on: On, saved: Record<string, unknown> = {}) {
+  const stored = new Map<string, unknown>(Object.entries(saved))
   on('store.get', (_, e) => ({ value: stored.get(e.key) }))
   on('store.set', (_, e) => {
     stored.set(e.key, e.value)
     return { value: undefined }
   })
+
+  return stored
+}
+
+test('with "In sub-sessions: Open" a sub-session opens the board too', async ($, on) => {
+  const sub = { ...CURRENT, startedBy: 'local_a' }
+  const stored = store(on)
   const { clock, opens } = engine(on, JSON.stringify(SESSIONS), sub)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'settings' })
@@ -469,4 +476,27 @@ test('with "In sub-sessions: Open" a sub-session opens the board too', async ($,
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(1)
   expect(opens).toEqual(['session-kanban'])
+})
+
+test('settings chosen in one session are where the next session starts', async ($, on) => {
+  // Saved by an earlier session; a value of the wrong type is passed over.
+  const stored = store(on, { layoutMode: 'columns', titleMode: 'multiline', cornerStyle: 'rounded', loadCount: 50, openSections: { today: false } })
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings' })
+  expect((await ui.find({ key: 'layout' }))?.props.value).toBe('columns')
+  expect((await ui.find({ key: 'title-mode' }))?.props.value).toBe('multiline')
+  expect((await ui.find({ key: 'corners' }))?.props.value).toBe('rounded')
+  expect((await ui.find({ key: 'count' }))?.props.value).toBe('25')
+  await ui.press({ key: 'settings' })
+  expect(await ui.find({ key: 'local_a' })).toBeUndefined()
+  // What changes now is saved for the session after.
+  await ui.press({ key: 'expand-today' })
+  await ui.select({ key: 'filter', value: 'g1' })
+  expect(stored.get('openSections')).toEqual({ today: true })
+  expect(stored.get('filter')).toBe('g1')
+  await ui.unmount()
 })

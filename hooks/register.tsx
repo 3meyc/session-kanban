@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement } from 'claude-code'
+import type { Atom, EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { Card, CornerStyle, Detail, Failure, LayoutMode, TitleMode } from '../types'
 
@@ -38,14 +38,40 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
-// Plugin state lives for one session, and this choice must reach sessions not
-// yet started, so it is kept in the plugin's store and mirrored here to draw.
 const isOpenInSubs = atom({ plugin: 'session-kanban', key: 'isOpenInSubs' } as const, false)
-const OPEN_IN_SUBS_KEY = 'isOpenInSubs'
 const layoutMode = atom({ plugin: 'session-kanban', key: 'layoutMode' } as const, 'stacked' as LayoutMode)
 const query = atom({ plugin: 'session-kanban', key: 'query' } as const, '')
 const fetchedAt = atom({ plugin: 'session-kanban', key: 'fetchedAt' } as const, 0)
 const failure = atom({ plugin: 'session-kanban', key: 'failure' } as const, null as Failure | null)
+
+// Plugin state lives for one session, so the board's choices are also kept in
+// the plugin's store, under their atom's key, and a new session starts with them.
+// The loader lists the atoms a module reads and writes from each update call, so
+// every setting is named at its own call rather than looped over.
+function save<T>($: EngineInterface, setting: Atom<T>) {
+  return (value: T) => $.store.set(setting.ref.key, value).catch(() => undefined)
+}
+
+// A value of another type than the atom's (an older or hand-edited store) is passed over.
+async function saved<T>($: EngineInterface, setting: Atom<T>): Promise<T | undefined> {
+  const value = await $.store.get(setting.ref.key).catch(() => undefined)
+
+  return value !== null && typeof value === typeof setting.initial ? (value as T) : undefined
+}
+
+async function restoreSettings($: EngineInterface) {
+  await saved($, filter).then(value => update($, filter, current => value ?? current))
+  await saved($, isThisWeek).then(value => update($, isThisWeek, current => value ?? current))
+  await saved($, isRoutinesShown).then(value => update($, isRoutinesShown, current => value ?? current))
+  await saved($, isArchivedOpen).then(value => update($, isArchivedOpen, current => value ?? current))
+  await saved($, archivedShownIn).then(value => update($, archivedShownIn, current => value ?? current))
+  await saved($, openSections).then(value => update($, openSections, current => value ?? current))
+  await saved($, loadCount).then(value => update($, loadCount, current => value ?? current))
+  await saved($, titleMode).then(value => update($, titleMode, current => value ?? current))
+  await saved($, cornerStyle).then(value => update($, cornerStyle, current => value ?? current))
+  await saved($, isOpenInSubs).then(value => update($, isOpenInSubs, current => value ?? current))
+  await saved($, layoutMode).then(value => update($, layoutMode, current => value ?? current))
+}
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
 // both light and dark themes; theme keys have no translucent variant.
@@ -284,7 +310,7 @@ function startPolling($: EngineInterface) {
 // stays closed there and polls only once /kanban opens it.
 async function settleAutoOpen($: EngineInterface, list: Card[]) {
   isAutoOpenPending = false
-  if (list.find(card => card.isCurrent)?.parentId && (await $.store.get(OPEN_IN_SUBS_KEY).catch(() => false)) !== true) {
+  if (list.find(card => card.isCurrent)?.parentId && !(await read($, isOpenInSubs))) {
     pollTimer?.cancel()
     pollTimer = null
     return
@@ -409,7 +435,7 @@ export const register: Register = on => {
       description: 'Show your Code-tab sessions as a Kanban board in a pane',
     })
     isAutoOpenPending = true
-    if ((await $.store.get(OPEN_IN_SUBS_KEY).catch(() => false)) === true) await update($, isOpenInSubs, () => true)
+    await restoreSettings($)
     startPolling($)
     void refresh($)
 
@@ -539,7 +565,7 @@ export const register: Register = on => {
           options={COUNT_OPTIONS.map(value => ({ value, label: countLabel(value) }))}
           value={countChoice}
           onSelect={value => {
-            void update($, loadCount, () => value)
+            void update($, loadCount, () => value).then(save($, loadCount))
             later($, () => refresh($))
           }}
         />
@@ -550,7 +576,7 @@ export const register: Register = on => {
           label="Section"
           options={options}
           value={selected}
-          onSelect={value => update($, filter, () => value)}
+          onSelect={value => update($, filter, () => value).then(save($, filter))}
         />
       )
       titleControl = (
@@ -562,7 +588,7 @@ export const register: Register = on => {
             { value: 'multiline', label: 'Multiline' },
           ]}
           value={isMultiline ? 'multiline' : 'ellipsis'}
-          onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis'))}
+          onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis')).then(save($, titleMode))}
         />
       )
       subsControl = (
@@ -574,10 +600,7 @@ export const register: Register = on => {
             { value: 'open', label: 'Open' },
           ]}
           value={opensInSubs ? 'open' : 'closed'}
-          onSelect={value => {
-            void update($, isOpenInSubs, () => value === 'open')
-            void $.store.set(OPEN_IN_SUBS_KEY, value === 'open').catch(() => undefined)
-          }}
+          onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
         />
       )
       cornerControl = (
@@ -589,7 +612,7 @@ export const register: Register = on => {
             { value: 'rounded', label: 'Rounded' },
           ]}
           value={isSquare ? 'square' : 'rounded'}
-          onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square'))}
+          onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square')).then(save($, cornerStyle))}
         />
       )
       layoutControl = (
@@ -601,7 +624,7 @@ export const register: Register = on => {
             { value: 'stacked', label: 'Stacked' },
           ]}
           value={isStacked ? 'stacked' : 'columns'}
-          onSelect={value => update($, layoutMode, () => (value === 'stacked' ? 'stacked' : 'columns'))}
+          onSelect={value => update($, layoutMode, () => (value === 'stacked' ? 'stacked' : 'columns')).then(save($, layoutMode))}
         />
       )
     }
@@ -712,7 +735,7 @@ export const register: Register = on => {
         archivedBelow > 0
           ? [
               action(`archived-${card.id}`, showsArchived ? 'Hide archived' : `Show ${archivedBelow} archived`, () =>
-                update($, archivedShownIn, current => ({ ...current, [card.id]: !showsArchived })),
+                update($, archivedShownIn, current => ({ ...current, [card.id]: !showsArchived })).then(save($, archivedShownIn)),
               ),
             ]
           : []
@@ -905,7 +928,8 @@ export const register: Register = on => {
     const archivedCount = cardsIn(ARCHIVED).length
     // In progress opens by itself while something runs; Today and Earlier start open.
     const isOpen = (column: Column) => openedByHand[column.key] ?? (column === PROGRESS ? cardsIn(PROGRESS).length > 0 : true)
-    const setOpen = (column: Column, isOn: boolean) => update($, openSections, current => ({ ...current, [column.key]: isOn }))
+    const setOpen = (column: Column, isOn: boolean) =>
+      update($, openSections, current => ({ ...current, [column.key]: isOn })).then(save($, openSections))
     const section = (column: Column) => {
       const count = cardsIn(column).length
 
@@ -940,13 +964,13 @@ export const register: Register = on => {
               key="week"
               label="This week"
               variant={weekOnly ? 'primary' : 'secondary'}
-              onPress={() => update($, isThisWeek, isOn => !isOn)}
+              onPress={() => update($, isThisWeek, isOn => !isOn).then(save($, isThisWeek))}
             />
             <Button
               key="routines"
               label="Show routines"
               variant={routinesShown ? 'primary' : 'secondary'}
-              onPress={() => update($, isRoutinesShown, isOn => !isOn)}
+              onPress={() => update($, isRoutinesShown, isOn => !isOn).then(save($, isRoutinesShown))}
             />
             <Button key="refresh" label="Refresh" onPress={() => later($, () => refresh($))} />
             {statusNote}
@@ -991,8 +1015,8 @@ export const register: Register = on => {
         >
           {[PROGRESS, ...MIDDLE].map(section)}
           {archivedOpen
-            ? fullColumn(ARCHIVED, () => update($, isArchivedOpen, () => false))
-            : rail(ARCHIVED, '❮', archivedCount, () => update($, isArchivedOpen, () => true))}
+            ? fullColumn(ARCHIVED, () => update($, isArchivedOpen, () => false).then(save($, isArchivedOpen)))
+            : rail(ARCHIVED, '❮', archivedCount, () => update($, isArchivedOpen, () => true).then(save($, isArchivedOpen)))}
         </Box>
       </Box>
     )
