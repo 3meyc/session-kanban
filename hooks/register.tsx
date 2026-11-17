@@ -266,6 +266,26 @@ const RETRY_STEPS_MS = [5_000, 15_000, POLL_MS]
 const OFFLINE_GRACE_MS = 3 * 60_000
 
 let retryTimer: ReturnType<EngineInterface['clock']['after']> | null = null
+let pollTimer: ReturnType<EngineInterface['clock']['every']> | null = null
+// Whether the session is a sub-session is known only from the first list, so
+// the board opens itself then, and survives a slow or offline start.
+let isAutoOpenPending = false
+
+function startPolling($: EngineInterface) {
+  pollTimer ??= $.clock.every(POLL_MS, () => void refresh($))
+}
+
+// The board opens by itself in root sessions only: a sub-session has a parent
+// whose board shows it already, and there it polls only once /kanban opens it.
+function settleAutoOpen($: EngineInterface, list: Card[]) {
+  isAutoOpenPending = false
+  if (list.find(card => card.isCurrent)?.parentId) {
+    pollTimer?.cancel()
+    pollTimer = null
+    return
+  }
+  void $.ui.open({ id: PANE, title: TITLE })
+}
 
 async function refresh($: EngineInterface) {
   retryTimer?.cancel()
@@ -278,6 +298,7 @@ async function refresh($: EngineInterface) {
     // sessions that finished long ago, so only a recent load is compared.
     if (at - (await read($, fetchedAt)) <= FINISH_WINDOW_MS) announceFinished($, previous, outcome.list)
     await update($, cards, () => outcome.list)
+    if (isAutoOpenPending) settleAutoOpen($, outcome.list)
     await update($, failure, () => null)
     // Only a successful load moves this, so a failure can say how old the cards are.
     await update($, fetchedAt, () => at)
@@ -382,9 +403,9 @@ export const register: Register = on => {
       name: 'kanban',
       description: 'Show your Code-tab sessions as a Kanban board in a pane',
     })
+    isAutoOpenPending = true
+    startPolling($)
     void refresh($)
-    $.clock.every(POLL_MS, () => void refresh($))
-    void $.ui.open({ id: PANE, title: TITLE })
 
     return started
   })
@@ -398,6 +419,7 @@ export const register: Register = on => {
       return { text: 'Sessions board closed.' }
     }
     await $.ui.open({ id: PANE, title: TITLE })
+    startPolling($)
     later($, () => refresh($))
 
     return { text: 'Sessions board opened.' }

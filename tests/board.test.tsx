@@ -34,11 +34,15 @@ type On = Parameters<TestBody>[1]
 const RUN_KANBAN = { command: 'kanban', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } } as const
 
 // `listReply` is a function where a test changes the reply between refreshes.
-function engine(on: On, listReply: string | ((args: Record<string, unknown>) => string)) {
+function engine(on: On, listReply: string | ((args: Record<string, unknown>) => string), current: object = CURRENT) {
   const calls: string[] = []
+  const opens: string[] = []
   const clock = mock.clock(on, { now: NOW })
   on('command.register', () => ({ value: { command: 'kanban' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_, e) => {
+    opens.push(e.id)
+    return { value: { isPlaced: true } }
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('mcp.call', (_, e) => {
     calls.push(e.tool)
@@ -47,7 +51,7 @@ function engine(on: On, listReply: string | ((args: Record<string, unknown>) => 
       e.tool === 'list_sessions'
         ? typeof listReply === 'function' ? listReply(e.args) : listReply
         : e.tool === 'get_session' && id === 'self'
-          ? JSON.stringify(CURRENT)
+          ? JSON.stringify(current)
           : e.tool === 'get_session'
             ? JSON.stringify({ sessionId: id, createdAt: '2026-11-03T07:01:00Z', scheduledTaskId: id === 'local_r' ? 'nightly-report' : undefined })
           : 'Deleted 1 session.'
@@ -55,7 +59,7 @@ function engine(on: On, listReply: string | ((args: Record<string, unknown>) => 
     return { value: { content: [{ type: 'text', text }], isError: false } }
   })
 
-  return { calls, clock }
+  return { calls, clock, opens }
 }
 
 test('status columns, rails, routines and sub-sessions', async ($, on) => {
@@ -421,4 +425,27 @@ test('archived sessions behind many archived sub-sessions still reach the Archiv
   await ui.press({ key: 'expand-archived' })
   expect(await ui.find({ key: 'local_old' })).toBeDefined()
   await ui.unmount()
+})
+
+test('the board opens by itself in a root session only', async ($, on) => {
+  const { clock, opens } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+  expect(opens).toEqual(['session-kanban'])
+})
+
+test('a sub-session neither opens the board nor polls until /kanban', async ($, on) => {
+  const sub = { ...CURRENT, startedBy: 'local_a' }
+  const { calls, clock, opens } = engine(on, JSON.stringify(SESSIONS), sub)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+  expect(opens).toEqual([])
+  const listed = calls.filter(tool => tool === 'list_sessions').length
+  await clock.advance(60_000)
+  expect(calls.filter(tool => tool === 'list_sessions').length).toBe(listed)
+  // Asked for, it opens and keeps itself current like anywhere else.
+  await $.command.run(RUN_KANBAN)
+  expect(opens).toEqual(['session-kanban'])
+  await clock.advance(30_000)
+  expect(calls.filter(tool => tool === 'list_sessions').length).toBeGreaterThan(listed)
 })
