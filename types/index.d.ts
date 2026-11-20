@@ -17,9 +17,20 @@ export type Card = {
 // What only get_session tells about a session; fixed for its life, so looked up once.
 export type Detail = { isRoutine: boolean; createdAt: number }
 
-// Transcript entries per UTC hour ("YYYY-MM-DDTHH"), by session id; only hours
-// in the timeline's window, and only sessions that wrote in it.
-export type Activity = Record<string, Record<string, number>>
+// One UTC hour of a session: transcript entries, tokens its replies used, and
+// of those the output tokens.
+export type HourCounts = [entries: number, tokens: number, output: number]
+
+// By session id, then UTC hour ("YYYY-MM-DDTHH"); only hours in the timeline's
+// window, and only sessions that wrote in it.
+export type Activity = Record<string, Record<string, HourCounts>>
+
+// What the card timelines and the heatmap measure, or neither drawn.
+export type ActivityMetric = 'entries' | 'tokens' | 'hidden'
+
+// The app's summary of a session's last turn, kept only when the session waits
+// on the person: blocked on an answer, or done and ready for review.
+export type TurnStatus = { category: 'blocked' | 'review_ready'; needsAction: string }
 
 export type TitleMode = 'ellipsis' | 'multiline'
 
@@ -37,7 +48,8 @@ declare module 'claude-code' {
       cards: Shaped<Card[]>
       details: Shaped<Record<string, Detail>>
       activity: Shaped<Activity>
-      isActivityShown: boolean
+      statuses: Shaped<Record<string, TurnStatus>>
+      activityMetric: ActivityMetric
       filter: string
       isThisWeek: boolean
       isRoutinesShown: boolean

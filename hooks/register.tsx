@@ -1,7 +1,18 @@
 import { atom, read, update } from 'claude-code'
 import type { Atom, EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Activity, Card, CornerStyle, Detail, Failure, LayoutMode, TitleMode } from '../types'
+import type {
+  Activity,
+  ActivityMetric,
+  Card,
+  CornerStyle,
+  Detail,
+  Failure,
+  HourCounts,
+  LayoutMode,
+  TitleMode,
+  TurnStatus,
+} from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -26,8 +37,9 @@ const BUTTON_INSET = 'xs'
 // stored, which outlives a reload.
 const cards = atom({ plugin: 'session-kanban', key: 'cards' } as const, [], { shape: 'cards-4' })
 const details = atom({ plugin: 'session-kanban', key: 'details' } as const, {}, { shape: 'details-1' })
-const activity = atom({ plugin: 'session-kanban', key: 'activity' } as const, {}, { shape: 'activity-1' })
-const isActivityShown = atom({ plugin: 'session-kanban', key: 'isActivityShown' } as const, true)
+const activity = atom({ plugin: 'session-kanban', key: 'activity' } as const, {}, { shape: 'activity-2' })
+const statuses = atom({ plugin: 'session-kanban', key: 'statuses' } as const, {}, { shape: 'statuses-1' })
+const activityMetric = atom({ plugin: 'session-kanban', key: 'activityMetric' } as const, 'entries' as ActivityMetric)
 const filter = atom({ plugin: 'session-kanban', key: 'filter' } as const, 'all')
 const isThisWeek = atom({ plugin: 'session-kanban', key: 'isThisWeek' } as const, false)
 const isRoutinesShown = atom({ plugin: 'session-kanban', key: 'isRoutinesShown' } as const, false)
@@ -73,7 +85,7 @@ async function restoreSettings($: EngineInterface) {
   await saved($, cornerStyle).then(value => update($, cornerStyle, current => value ?? current))
   await saved($, isOpenInSubs).then(value => update($, isOpenInSubs, current => value ?? current))
   await saved($, layoutMode).then(value => update($, layoutMode, current => value ?? current))
-  await saved($, isActivityShown).then(value => update($, isActivityShown, current => value ?? current))
+  await saved($, activityMetric).then(value => update($, activityMetric, current => value ?? current))
 }
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
@@ -234,67 +246,232 @@ const ACTIVITY_BINS = WEEK_MS / ACTIVITY_BIN_MS
 const ACTIVITY_BAR_WIDTH = 6
 const ACTIVITY_HEIGHT = 16
 
-// The session list says only when a session was last active; its transcript
-// says when it worked. The script reads the transcripts on this Mac and prints
-// "<session id> <hour>=<count> …" for the hours since the window's start.
+const HOUR_KEY = /^\d{4}-\d{2}-\d{2}T\d{2}$/
+const STATUS_CATEGORIES: readonly TurnStatus['category'][] = ['blocked', 'review_ready']
+
+// The session list says only when a session was last active; the app's own
+// record of each session says what its last turn left waiting, and its
+// transcript says when it worked and how many tokens it used. The script reads
+// both on this Mac; with the timelines hidden it skips the transcripts.
 async function learnActivity($: EngineInterface, list: Card[], now: number) {
   const since = now - WEEK_MS
-  const ids = list.filter(card => card.isRunning || card.lastActivityAt >= since).map(card => card.id)
+  const ids = list.filter(card => !card.isArchived && (card.isRunning || card.lastActivityAt >= since)).map(card => card.id)
+  const isMeasured = (await read($, activityMetric)) !== 'hidden'
   const ran =
     ids.length === 0
       ? null
       : await $.process
-          .run(['/bin/sh', `${$.plugin.root}/hooks/activity.sh`, new Date(since).toISOString().slice(0, 13)], {
-            stdin: `${ids.join('\n')}\n`,
-          })
+          .run(
+            ['/bin/sh', `${$.plugin.root}/hooks/activity.sh`, new Date(since).toISOString().slice(0, 13), isMeasured ? 'all' : 'status'],
+            { stdin: `${ids.join('\n')}\n` },
+          )
           .catch(() => null)
   if (ids.length > 0 && (!ran || ran.exitCode !== 0)) return
   const learned: Activity = {}
+  const waiting: Record<string, TurnStatus> = {}
   for (const line of ran?.stdout.split('\n') ?? []) {
-    const [id, ...pairs] = line.trim().split(' ')
+    const [kind, id, ...rest] = line.trim().split(' ')
     if (!id?.startsWith('local_')) continue
-    const hours: Record<string, number> = {}
-    for (const pair of pairs) {
-      const [hour, count] = pair.split('=')
-      if (hour && /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(hour) && Number(count) > 0) hours[hour] = Number(count)
+    if (kind === 'hours') {
+      const hours: Record<string, HourCounts> = {}
+      for (const pair of rest) {
+        const [hour, counts] = pair.split('=')
+        const [entries = 0, tokens = 0, output = 0] = (counts ?? '').split(',').map(Number)
+        if (hour && HOUR_KEY.test(hour) && entries > 0) hours[hour] = [entries, tokens || 0, output || 0]
+      }
+      if (Object.keys(hours).length > 0) learned[id] = hours
     }
-    if (Object.keys(hours).length > 0) learned[id] = hours
+    const category = STATUS_CATEGORIES.find(known => known === rest[0])
+    if (kind === 'status' && category) waiting[id] = { category, needsAction: unescapeJson(rest.slice(1).join(' ')) }
   }
   await update($, activity, () => learned)
+  await update($, statuses, () => waiting)
 }
 
-// One bar per three hours, as tall as its share of the card's busiest bar, on a
-// faint baseline, with a tick at each local midnight; null when nothing was written.
-function activitySvg(hours: Record<string, number>, now: number, color: string): { source: string; alt: string } | null {
-  const start = now - WEEK_MS
-  const bins = new Array<number>(ACTIVITY_BINS).fill(0)
-  for (const [hour, count] of Object.entries(hours)) {
-    const index = Math.floor((Date.parse(`${hour}:00:00Z`) - start) / ACTIVITY_BIN_MS)
-    if (index >= 0 && index < ACTIVITY_BINS) bins[index] = (bins[index] ?? 0) + count
+// The script hands the needs-action line over as it is written in the record.
+function unescapeJson(text: string): string {
+  try {
+    const value: unknown = JSON.parse(`"${text}"`)
+    return typeof value === 'string' ? value : text
+  } catch {
+    return text
   }
-  const peak = Math.max(...bins)
-  if (peak === 0) return null
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function clockTime(ms: number): string {
+  const at = new Date(ms)
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+}
+
+function dayTime(ms: number): string {
+  return `${WEEKDAYS[new Date(ms).getDay()]} ${clockTime(ms)}`
+}
+
+function tokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 1_000) return `${Math.round(count / 1_000)}k`
+  return String(count)
+}
+
+// Titles go into SVG markup as text.
+function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function measureOf(counts: HourCounts, metric: ActivityMetric): number {
+  return metric === 'tokens' ? counts[1] : counts[0]
+}
+
+function countsLabel(counts: HourCounts): string {
+  return `${counts[0]} entries · ${tokenCount(counts[1])} tokens (${tokenCount(counts[2])} output)`
+}
+
+// A sub-session's span on its parent's timeline, from its start to its last
+// activity, or to now while it runs.
+type Lifespan = { title: string; start: number; end: number; isRunning: boolean; color: string }
+
+const LIFESPAN_HEIGHT = 3
+const LIFESPAN_GAP = 2
+// More rows than this would outgrow the card; the most recent are kept.
+const LIFESPANS_SHOWN = 12
+const RUNNING_COLOR = '#22c55e'
+const ARCHIVED_COLOR = '#9ca3af'
+
+// One card's drawing on one time axis, the last week: a bar per three hours,
+// as tall as its share of the card's busiest bar, then a row per sub-session's
+// lifespan, with a tick at each local midnight across both. With `withTips`
+// each bar and row carries a tooltip (the Svg is then drawn interactive).
+// Null when there is nothing to draw.
+function cardSvg(input: {
+  hours: Record<string, HourCounts> | undefined
+  metric: ActivityMetric
+  lifespans: Lifespan[]
+  now: number
+  color: string
+  withTips: boolean
+}): { source: string; alt: string; height: number } | null {
+  const { metric, lifespans, now, color, withTips } = input
+  const start = now - WEEK_MS
+  const bins = Array.from({ length: ACTIVITY_BINS }, (): HourCounts => [0, 0, 0])
+  for (const [hour, counts] of Object.entries(input.hours ?? {})) {
+    const index = Math.floor((Date.parse(`${hour}:00:00Z`) - start) / ACTIVITY_BIN_MS)
+    const bin = bins[index]
+    if (bin) bins[index] = [bin[0] + counts[0], bin[1] + counts[1], bin[2] + counts[2]]
+  }
+  const peak = Math.max(...bins.map(bin => measureOf(bin, metric)))
+  const shown = lifespans.filter(span => span.end >= start).slice(0, LIFESPANS_SHOWN)
+  if (peak === 0 && shown.length === 0) return null
   const width = ACTIVITY_BINS * ACTIVITY_BAR_WIDTH
-  const toX = (at: number) => ((at - start) / ACTIVITY_BIN_MS) * ACTIVITY_BAR_WIDTH
-  const bars = bins.flatMap((count, index) => {
-    if (count === 0) return []
-    const height = Math.max(2, Math.round((count / peak) * (ACTIVITY_HEIGHT - 2)))
-    return [`<rect x="${index * ACTIVITY_BAR_WIDTH}" y="${ACTIVITY_HEIGHT - height}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${height}"/>`]
+  const toX = (at: number) => Math.max(0, ((at - start) / ACTIVITY_BIN_MS) * ACTIVITY_BAR_WIDTH)
+  const tip = (text: string) => (withTips ? `<title>${escapeXml(text)}</title>` : '')
+  const timelineHeight = peak > 0 ? ACTIVITY_HEIGHT : 0
+  const spansTop = timelineHeight > 0 ? timelineHeight + LIFESPAN_GAP + 1 : 0
+  const height = shown.length > 0 ? spansTop + shown.length * (LIFESPAN_HEIGHT + LIFESPAN_GAP) - LIFESPAN_GAP : timelineHeight
+
+  let busySpans = 0
+  const bars = bins.flatMap((bin, index) => {
+    const value = measureOf(bin, metric)
+    if (value === 0 || peak === 0) return []
+    busySpans++
+    const barHeight = Math.max(2, Math.round((value / peak) * (ACTIVITY_HEIGHT - 2)))
+    const x = index * ACTIVITY_BAR_WIDTH
+    const binStart = start + index * ACTIVITY_BIN_MS
+    const bar = `<rect x="${x}" y="${ACTIVITY_HEIGHT - barHeight}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${barHeight}"/>`
+    // The whole column takes the pointer, so a short bar is as easy to hover as a tall one.
+    return withTips
+      ? [
+          `<g>${tip(`${dayTime(binStart)}–${clockTime(binStart + ACTIVITY_BIN_MS)} · ${countsLabel(bin)}`)}` +
+            `<rect x="${x}" y="0" width="${ACTIVITY_BAR_WIDTH}" height="${ACTIVITY_HEIGHT}" fill="transparent"/>${bar}</g>`,
+        ]
+      : [bar]
+  })
+  const rows = shown.map((span, index) => {
+    const y = spansTop + index * (LIFESPAN_HEIGHT + LIFESPAN_GAP)
+    const x = toX(span.start)
+    const spanWidth = Math.max(2, toX(span.end) - x)
+    const label = `${span.title} · ${dayTime(span.start)} – ${span.isRunning ? 'now' : dayTime(span.end)}`
+
+    return `<g>${tip(label)}<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}"/></g>`
   })
   const ticks: string[] = []
   const midnight = new Date(start)
   midnight.setHours(24, 0, 0, 0)
   for (let at = midnight.getTime(); at < now; at = new Date(at).setDate(new Date(at).getDate() + 1)) {
     const x = toX(at).toFixed(1)
-    ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${ACTIVITY_HEIGHT}"/>`)
+    ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}"/>`)
+  }
+  const baseline = timelineHeight > 0 ? `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` : ''
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
+    `${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
+    `<g fill="${color}">${bars.join('')}</g>${rows.join('')}</svg>`
+  const measured = metric === 'tokens' ? 'tokens' : 'activity'
+  const alt = [
+    peak > 0 ? `${measured === 'tokens' ? 'Tokens' : 'Activity'} over the last 7 days: busy in ${busySpans} of ${ACTIVITY_BINS} three-hour spans` : '',
+    shown.length > 0 ? `${shown.length} sub-session${shown.length === 1 ? '' : 's'} on the same days` : '',
+  ]
+    .filter(Boolean)
+    .join('; ')
+
+  return { source, alt, height }
+}
+
+const HEATMAP_CELL = 11
+const HEATMAP_PITCH = 12
+const HEATMAP_LABEL_WIDTH = 28
+const HEATMAP_COLOR = '#3b82f6'
+const HEATMAP_TEXT = '#8b8b8b'
+
+// The whole board's week as a grid: a row per local day, today last, and a
+// column per local hour, shaded by the sum over the sessions shown. One Svg,
+// so it is drawn interactive with a tooltip per hour.
+function heatmapSvg(perHour: Map<number, HourCounts>, metric: ActivityMetric, now: number): { source: string; alt: string; height: number } | null {
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  const firstDay = new Date(today)
+  firstDay.setDate(firstDay.getDate() - 6)
+  const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, (): HourCounts => [0, 0, 0]))
+  for (const [at, counts] of perHour) {
+    const day = new Date(at)
+    day.setHours(0, 0, 0, 0)
+    const line = cells[Math.round((day.getTime() - firstDay.getTime()) / DAY_MS)]
+    const hour = new Date(at).getHours()
+    const cell = line?.[hour]
+    if (line && cell) line[hour] = [cell[0] + counts[0], cell[1] + counts[1], cell[2] + counts[2]]
+  }
+  const peak = Math.max(...cells.flat().map(cell => measureOf(cell, metric)))
+  if (peak === 0) return null
+  const width = HEATMAP_LABEL_WIDTH + 24 * HEATMAP_PITCH
+  const height = 7 * HEATMAP_PITCH + HEATMAP_PITCH
+  const parts: string[] = []
+  let busyHours = 0
+  cells.forEach((row, rowIndex) => {
+    const day = new Date(firstDay)
+    day.setDate(day.getDate() + rowIndex)
+    const y = rowIndex * HEATMAP_PITCH
+    parts.push(`<text x="0" y="${y + 9}">${WEEKDAYS[day.getDay()]}</text>`)
+    row.forEach((cell, hour) => {
+      const value = measureOf(cell, metric)
+      if (value > 0) busyHours++
+      const opacity = value === 0 ? 0.07 : 0.2 + 0.8 * Math.sqrt(value / peak)
+      const x = HEATMAP_LABEL_WIDTH + hour * HEATMAP_PITCH
+      const label = `${WEEKDAYS[day.getDay()]} ${String(hour).padStart(2, '0')}:00 · ${value === 0 ? 'nothing' : countsLabel(cell)}`
+      parts.push(
+        `<g><title>${escapeXml(label)}</title><rect x="${x}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill="${HEATMAP_COLOR}" opacity="${opacity.toFixed(2)}"/></g>`,
+      )
+    })
+  })
+  for (const hour of [0, 6, 12, 18]) {
+    parts.push(`<text x="${HEATMAP_LABEL_WIDTH + hour * HEATMAP_PITCH}" y="${height - 2}">${String(hour).padStart(2, '0')}</text>`)
   }
   const source =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ACTIVITY_HEIGHT}" viewBox="0 0 ${width} ${ACTIVITY_HEIGHT}" preserveAspectRatio="none">` +
-    `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` +
-    `<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
-    `<g fill="${color}">${bars.join('')}</g></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<g font-family="-apple-system, system-ui, sans-serif" font-size="9" fill="${HEATMAP_TEXT}">${parts.join('')}</g></svg>`
+  const measured = metric === 'tokens' ? 'Tokens' : 'Activity'
 
-  return { source, alt: `Activity over the last 7 days: busy in ${bars.length} of ${ACTIVITY_BINS} three-hour spans` }
+  return { source, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours this week`, height }
 }
 
 // How far the archived list may widen: up to this many times the chosen count.
@@ -406,7 +583,7 @@ async function refresh($: EngineInterface) {
     // Only a successful load moves this, so a failure can say how old the cards are.
     await update($, fetchedAt, () => at)
     await learnDetails($, outcome.list)
-    if (await read($, isActivityShown)) await learnActivity($, outcome.list, at)
+    await learnActivity($, outcome.list, at)
     return
   }
   const kind: Failure['kind'] = OFFLINE_PATTERN.test(outcome.problem) ? 'offline' : 'error'
@@ -615,9 +792,11 @@ export const register: Register = on => {
     let layoutControl = <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>
     const opensInSubs = await read($, isOpenInSubs)
     let subsControl = <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>
-    const activityShown = await read($, isActivityShown)
-    const activityOf = activityShown ? await read($, activity) : {}
-    let activityControl = <Text dimColor>Activity: {activityShown ? 'shown' : 'hidden'}</Text>
+    const metric = await read($, activityMetric)
+    const activityOf = metric === 'hidden' ? {} : await read($, activity)
+    const waitingOf = await read($, statuses)
+    const metricLabel = metric === 'tokens' ? 'tokens' : metric === 'hidden' ? 'hidden' : 'activity'
+    let activityControl = <Text dimColor>Timelines: {metricLabel}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -670,15 +849,17 @@ export const register: Register = on => {
       activityControl = (
         <Select
           key="activity"
-          label="Activity"
+          label="Timelines"
           options={[
-            { value: 'shown', label: 'Last 7 days' },
+            { value: 'entries', label: 'Activity' },
+            { value: 'tokens', label: 'Tokens' },
             { value: 'hidden', label: 'Hidden' },
           ]}
-          value={activityShown ? 'shown' : 'hidden'}
+          value={metric}
           onSelect={value => {
-            void update($, isActivityShown, () => value === 'shown').then(save($, isActivityShown))
-            if (value === 'shown') later($, () => refresh($))
+            const next: ActivityMetric = value === 'tokens' ? 'tokens' : value === 'hidden' ? 'hidden' : 'entries'
+            void update($, activityMetric, () => next).then(save($, activityMetric))
+            if (metric === 'hidden' && next !== 'hidden') later($, () => refresh($))
           }}
         />
       )
@@ -753,17 +934,48 @@ export const register: Register = on => {
       )
     }
 
-    // The terminal has no Svg; its board goes without the timeline.
-    const timelineOf = (card: Card, column: Column) => {
-      const hours = activityOf[card.id]
-      if (!hours || e.surface === 'terminal') return null
-      const drawing = activitySvg(hours, now, column.tint.slice(0, 7))
+    // What a session's last turn left for the person, while it is not running again.
+    const waitingFor = (card: Card) => (card.isRunning || card.isArchived ? undefined : waitingOf[card.id])
+
+    // The terminal has no Svg; its board goes without timelines. Today's cards
+    // carry tooltips: each is a sandboxed frame, so not every card gets one.
+    const timelineOf = (card: Card, column: Column, subs: Card[]) => {
+      if (metric === 'hidden' || e.surface === 'terminal') return null
+      const lifespans = subs.flatMap((sub): Lifespan[] => {
+        const createdAt = known[sub.id]?.createdAt
+        if (createdAt === undefined) return []
+        const color = sub.isArchived ? ARCHIVED_COLOR : sub.isRunning ? RUNNING_COLOR : column.tint.slice(0, 7)
+        return [{ title: sub.title, start: createdAt, end: sub.isRunning ? now : sub.lastActivityAt, isRunning: sub.isRunning, color }]
+      })
+      const withTips = column.key === 'today'
+      const drawing = cardSvg({ hours: activityOf[card.id], metric, lifespans, now, color: column.tint.slice(0, 7), withTips })
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 
       return (
         <Box key={`activity-${card.id}`} paddingLeft={inset} marginTop="xs">
-          <Svg alt={drawing.alt} height={ACTIVITY_HEIGHT} source={drawing.source} />
+          <Svg alt={drawing.alt} height={drawing.height} source={drawing.source} isInteractive={withTips || undefined} />
+        </Box>
+      )
+    }
+
+    const heatmap = () => {
+      if (metric === 'hidden' || e.surface === 'terminal') return null
+      const perHour = new Map<number, HourCounts>()
+      for (const card of all.filter(isVisible)) {
+        for (const [hour, counts] of Object.entries(activityOf[card.id] ?? {})) {
+          const at = Date.parse(`${hour}:00:00Z`)
+          const sum = perHour.get(at) ?? [0, 0, 0]
+          perHour.set(at, [sum[0] + counts[0], sum[1] + counts[1], sum[2] + counts[2]])
+        }
+      }
+      const drawing = heatmapSvg(perHour, metric, now)
+      if (!drawing) return null
+      const { Svg } = $.ui.resolve(e)
+
+      return (
+        <Box key="heatmap" paddingX={1}>
+          <Svg alt={drawing.alt} height={drawing.height} source={drawing.source} isInteractive />
         </Box>
       )
     }
@@ -823,6 +1035,13 @@ export const register: Register = on => {
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
               {titleOf(sub, sub.isArchived)}
             </Box>
+            {waitingFor(sub)?.category === 'blocked' && (
+              <Box key={`needs-${sub.id}`} flexShrink={0}>
+                <Text color="warning" size="caption">
+                  needs you
+                </Text>
+              </Box>
+            )}
             <Box flexGrow={1} />
             {openIcon(sub)}
           </Box>
@@ -905,6 +1124,7 @@ export const register: Register = on => {
       const seen = new Set([card.id])
       const showsArchived = shownIn[card.id] === true
       const firstLevel = listedBelow(card.id, seen, showsArchived)
+      const waiting = waitingFor(card)
 
       return (
         <Box
@@ -942,7 +1162,23 @@ export const register: Register = on => {
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>
-          {timelineOf(card, column)}
+          {waiting && (
+            <Box key={`needs-${card.id}`} flexDirection="row" gap="xs" alignItems="flex-start" paddingLeft={inset}>
+              <Box flexShrink={0}>
+                <Text color={waiting.category === 'blocked' ? 'warning' : 'suggestion'} size="caption" bold>
+                  {waiting.category === 'blocked' ? '● Needs you' : '● Ready for review'}
+                </Text>
+              </Box>
+              {waiting.needsAction !== '' && (
+                <Box flexShrink={1} minWidth={0}>
+                  <Text dimColor size="caption" wrap={isMultiline ? 'wrap' : 'truncate-end'}>
+                    {waiting.needsAction}
+                  </Text>
+                </Box>
+              )}
+            </Box>
+          )}
+          {timelineOf(card, column, showsArchived ? subs : subs.filter(sub => !sub.isArchived))}
           {subs.length > 0 && (
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
               <Text dimColor size="caption">
@@ -1049,10 +1285,12 @@ export const register: Register = on => {
     // disconnect that outlasts the grace period, also gets the banner below.
     const isSerious = problem !== null && (problem.kind === 'error' || now - problem.since >= OFFLINE_GRACE_MS)
     const dataAge = lastFetch ? `showing data from ${age(now - lastFetch)} ago` : 'no data yet'
+    const needYou = all.filter(card => isVisible(card) && waitingFor(card)?.category === 'blocked').length
     const statusNote =
       problem === null ? (
         <Text dimColor>
-          {topLevel.length} sessions{lastFetch ? ` · updated ${age(now - lastFetch)} ago` : ' · loading…'}
+          {topLevel.length} sessions{needYou > 0 ? ` · ${needYou} need${needYou === 1 ? 's' : ''} you` : ''}
+          {lastFetch ? ` · updated ${age(now - lastFetch)} ago` : ' · loading…'}
         </Text>
       ) : (
         <Text color={isSerious ? 'error' : 'warning'}>
@@ -1115,6 +1353,7 @@ export const register: Register = on => {
             </Text>
           </Box>
         )}
+        {heatmap()}
         <Box
           flexDirection={isStacked ? 'column' : 'row'}
           flexWrap={isStacked ? undefined : 'wrap'}

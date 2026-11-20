@@ -501,35 +501,104 @@ test('settings chosen in one session are where the next session starts', async (
   await ui.unmount()
 })
 
-test('each card with recent transcript entries shows a week of activity', async ($, on) => {
+// Answers the activity script with `stdout` and notes "<mode> <since> <ids>" per call.
+function activityScript(on: On, stdout: () => string) {
   const asked: string[] = []
   on('process.run', (_, e) => {
     const isActivity = String(e.argv[1]).endsWith('/hooks/activity.sh')
-    if (isActivity) asked.push(`${e.argv[2]} ${String(e.init?.stdin).trim().split('\n').join(',')}`)
-    const stdout = isActivity ? 'local_a 2026-11-03T10=5 2026-11-03T04=2 2026-10-20T10=9\nlocal_c 2026-10-20T10=9\nnot-a-session 1=1\n' : ''
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (isActivity) asked.push(`${e.argv[3]} ${e.argv[2]} ${String(e.init?.stdin).trim().split('\n').join(',')}`)
+    return { value: { exitCode: 0, stdout: isActivity ? stdout() : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+
+  return asked
+}
+
+test('each card with recent transcript entries shows a week of activity, or of tokens', async ($, on) => {
+  const asked = activityScript(
+    on,
+    () => 'hours local_a 2026-11-03T10=5,1000,100 2026-11-03T04=2,9000,900 2026-10-20T10=9,1,1\nhours local_c 2026-10-20T10=9,1,1\nhours not-a-session 1=1\n',
+  )
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(1)
 
-  // Only sessions active in the window are asked about, from its first hour on.
-  expect(asked[0]).toBe('2026-10-27T12 local_a,local_b,local_d,local_e,local_r,local_s')
+  // Only unarchived sessions active in the window are asked about, from its first hour on.
+  expect(asked[0]).toBe('all 2026-10-27T12 local_a,local_b,local_r,local_s')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const timelines = async () => (await ui.findAll({ type: 'Svg' })).filter(found => String(found.props.alt).startsWith('Activity'))
-  const drawn = await timelines()
+  const timelines = async () => (await ui.findAll({ type: 'Svg' })).filter(found => /^(Activity|Tokens) over/.test(String(found.props.alt)))
+  let drawn = await timelines()
   expect(drawn).toHaveLength(1)
   expect(await ui.find({ key: 'activity-local_a' })).toBeDefined()
   expect(drawn[0]?.props.alt).toBe('Activity over the last 7 days: busy in 2 of 56 three-hour spans')
-  // Two bars, the busier one full height; the hour outside the week is not drawn.
-  expect(String(drawn[0]?.props.source).match(/<rect x=/g)).toHaveLength(2)
-  expect(String(drawn[0]?.props.source)).toContain('<rect x="330" y="2" width="5" height="14"/>')
+  // The busier span is full height; the hour outside the week is not drawn.
+  let source = String(drawn[0]?.props.source)
+  expect(source).toContain('<rect x="330" y="2" width="5" height="14"/>')
+  // A Today card's bars carry tooltips, so it is drawn interactive.
+  expect(drawn[0]?.props.isInteractive).toBe(true)
+  expect(source.match(/<title>/g)).toHaveLength(2)
+  expect(source).toContain('· 5 entries · 1k tokens (100 output)</title>')
+  // The whole board's week, by day and hour, above the sections.
+  expect(await ui.find({ key: 'heatmap' })).toBeDefined()
+
   await ui.press({ key: 'settings' })
+  await ui.select({ key: 'activity', value: 'tokens' })
+  drawn = await timelines()
+  source = String(drawn[0]?.props.source)
+  expect(drawn[0]?.props.alt).toBe('Tokens over the last 7 days: busy in 2 of 56 three-hour spans')
+  expect(source).toContain('<rect x="318" y="2" width="5" height="14"/>')
+  const heat = (await ui.findAll({ type: 'Svg' })).find(found => String(found.props.alt).startsWith('Tokens of the sessions shown'))
+  expect(heat?.props.isInteractive).toBe(true)
+
   await ui.select({ key: 'activity', value: 'hidden' })
   expect(await timelines()).toHaveLength(0)
+  expect(await ui.find({ key: 'heatmap' })).toBeUndefined()
+  // Hidden, the script still reads what sessions wait for, but no transcripts.
+  await clock.advance(30_000)
+  expect(asked.at(-1)?.startsWith('status ')).toBe(true)
   await ui.unmount()
 
   const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
   await terminal.unmount()
+})
+
+test('a session waiting on you says so on its card and in the count', async ($, on) => {
+  activityScript(on, () => 'status local_b blocked pick one of \\"A\\" or B\nstatus local_c review_ready \nstatus local_a completed nothing\n')
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ key: 'needs-local_b' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: 'pick one of "A" or B' }))?.text).toBe('pick one of "A" or B')
+  expect(await ui.find({ key: 'needs-local_c' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '● Ready for review' })).toBeDefined()
+  // A completed turn waits for nothing.
+  expect(await ui.find({ key: 'needs-local_a' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /· 1 needs you ·/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test("a parent card lines up its sub-sessions' lifespans under its timeline", async ($, on) => {
+  const withSub = [
+    ...SESSIONS,
+    { sessionId: 'local_f', title: 'Logging <docs>', startedBy: 'local_a', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:30:00Z', group: { id: 'g1', name: 'Local tools' }, link: 'claude://x/local_f' },
+  ]
+  activityScript(on, () => 'hours local_a 2026-11-03T10=5,1000,100\nstatus local_f blocked answer me\n')
+  const { clock } = engine(on, JSON.stringify(withSub))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const chart = (await ui.findAll({ type: 'Svg' })).find(found => String(found.props.alt).startsWith('Activity over'))
+  expect(chart?.props.alt).toBe('Activity over the last 7 days: busy in 1 of 56 three-hour spans; 1 sub-session on the same days')
+  // The archived sub-session stays out until the card shows archived ones.
+  const source = String(chart?.props.source)
+  expect(source.match(/height="3"/g)).toHaveLength(1)
+  expect(source).toContain('y="19"')
+  expect(source).toContain('<title>Logging &lt;docs&gt; · ')
+  expect(chart?.props.height).toBe(22)
+  // A sub-session line says when it is the one waiting.
+  expect(await ui.find({ key: 'needs-local_f' })).toBeDefined()
+  await ui.unmount()
 })
