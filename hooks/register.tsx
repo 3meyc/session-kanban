@@ -247,6 +247,9 @@ const ACTIVITY_BAR_WIDTH = 6
 const ACTIVITY_HEIGHT = 16
 
 const HOUR_KEY = /^\d{4}-\d{2}-\d{2}T\d{2}$/
+// An Svg without a width takes its markup's own, up to the slot: wider than any
+// slot, it fills it, and preserveAspectRatio="none" stretches the drawing across.
+const STRETCH_WIDTH = 4000
 const STATUS_CATEGORIES: readonly TurnStatus['category'][] = ['blocked', 'review_ready']
 
 // The session list says only when a session was last active; the app's own
@@ -383,7 +386,7 @@ function cardSvg(input: {
     return withTips
       ? [
           `<g>${tip(`${dayTime(binStart)}–${clockTime(binStart + ACTIVITY_BIN_MS)} · ${countsLabel(bin)}`)}` +
-            `<rect x="${x}" y="0" width="${ACTIVITY_BAR_WIDTH}" height="${ACTIVITY_HEIGHT}" fill="transparent"/>${bar}</g>`,
+            `<rect x="${x}" y="0" width="${ACTIVITY_BAR_WIDTH}" height="${ACTIVITY_HEIGHT}" fill="transparent" class="hit"/>${bar}</g>`,
         ]
       : [bar]
   })
@@ -393,7 +396,7 @@ function cardSvg(input: {
     const spanWidth = Math.max(2, toX(span.end) - x)
     const label = `${span.title} · ${dayTime(span.start)} – ${span.isRunning ? 'now' : dayTime(span.end)}`
 
-    return `<g>${tip(label)}<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}"/></g>`
+    return `<g>${tip(label)}<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}" class="span"/></g>`
   })
   const ticks: string[] = []
   const midnight = new Date(start)
@@ -403,9 +406,11 @@ function cardSvg(input: {
     ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}"/>`)
   }
   const baseline = timelineHeight > 0 ? `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` : ''
+  // The span under the pointer lights up, so a hover shows even before its tooltip.
+  const hover = withTips ? `<style>g:hover>.hit{fill:${color};fill-opacity:0.25}g:hover>.span{stroke:${color};stroke-width:1}</style>` : ''
   const source =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
-    `${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
+    `${hover}${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
     `<g fill="${color}">${bars.join('')}</g>${rows.join('')}</svg>`
   const measured = metric === 'tokens' ? 'tokens' : 'activity'
   const alt = [
@@ -425,9 +430,14 @@ const HEATMAP_COLOR = '#3b82f6'
 const HEATMAP_TEXT = '#8b8b8b'
 
 // The whole board's week as a grid: a row per local day, today last, and a
-// column per local hour, shaded by the sum over the sessions shown. One Svg,
-// so it is drawn interactive with a tooltip per hour.
-function heatmapSvg(perHour: Map<number, HourCounts>, metric: ActivityMetric, now: number): { source: string; alt: string; height: number } | null {
+// column per local hour, shaded by the sum over the sessions shown, with a
+// tooltip per hour. The grid stretches to the board's width, so its text would
+// stretch too: the day names are a drawing of their own, the hours are Text.
+function heatmapSvg(
+  perHour: Map<number, HourCounts>,
+  metric: ActivityMetric,
+  now: number,
+): { grid: string; days: string; alt: string; height: number } | null {
   const today = new Date(now)
   today.setHours(0, 0, 0, 0)
   const firstDay = new Date(today)
@@ -443,35 +453,36 @@ function heatmapSvg(perHour: Map<number, HourCounts>, metric: ActivityMetric, no
   }
   const peak = Math.max(...cells.flat().map(cell => measureOf(cell, metric)))
   if (peak === 0) return null
-  const width = HEATMAP_LABEL_WIDTH + 24 * HEATMAP_PITCH
-  const height = 7 * HEATMAP_PITCH + HEATMAP_PITCH
-  const parts: string[] = []
+  const width = 24 * HEATMAP_PITCH
+  const height = 7 * HEATMAP_PITCH - (HEATMAP_PITCH - HEATMAP_CELL)
+  const cellParts: string[] = []
+  const dayParts: string[] = []
   let busyHours = 0
   cells.forEach((row, rowIndex) => {
     const day = new Date(firstDay)
     day.setDate(day.getDate() + rowIndex)
     const y = rowIndex * HEATMAP_PITCH
-    parts.push(`<text x="0" y="${y + 9}">${WEEKDAYS[day.getDay()]}</text>`)
+    dayParts.push(`<text x="0" y="${y + 9}">${WEEKDAYS[day.getDay()]}</text>`)
     row.forEach((cell, hour) => {
       const value = measureOf(cell, metric)
       if (value > 0) busyHours++
       const opacity = value === 0 ? 0.07 : 0.2 + 0.8 * Math.sqrt(value / peak)
-      const x = HEATMAP_LABEL_WIDTH + hour * HEATMAP_PITCH
       const label = `${WEEKDAYS[day.getDay()]} ${String(hour).padStart(2, '0')}:00 · ${value === 0 ? 'nothing' : countsLabel(cell)}`
-      parts.push(
-        `<g><title>${escapeXml(label)}</title><rect x="${x}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill="${HEATMAP_COLOR}" opacity="${opacity.toFixed(2)}"/></g>`,
+      cellParts.push(
+        `<g><title>${escapeXml(label)}</title><rect x="${hour * HEATMAP_PITCH}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill-opacity="${opacity.toFixed(2)}"/></g>`,
       )
     })
   })
-  for (const hour of [0, 6, 12, 18]) {
-    parts.push(`<text x="${HEATMAP_LABEL_WIDTH + hour * HEATMAP_PITCH}" y="${height - 2}">${String(hour).padStart(2, '0')}</text>`)
-  }
-  const source =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<g font-family="-apple-system, system-ui, sans-serif" font-size="9" fill="${HEATMAP_TEXT}">${parts.join('')}</g></svg>`
+  const grid =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
+    `<style>g:hover>rect{fill-opacity:1;stroke:${HEATMAP_TEXT};stroke-width:1}</style>` +
+    `<g fill="${HEATMAP_COLOR}">${cellParts.join('')}</g></svg>`
+  const days =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${HEATMAP_LABEL_WIDTH}" height="${height}" viewBox="0 0 ${HEATMAP_LABEL_WIDTH} ${height}">` +
+    `<g font-family="-apple-system, system-ui, sans-serif" font-size="9" fill="${HEATMAP_TEXT}">${dayParts.join('')}</g></svg>`
   const measured = metric === 'tokens' ? 'Tokens' : 'Activity'
 
-  return { source, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours this week`, height }
+  return { grid, days, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours this week`, height }
 }
 
 // How far the archived list may widen: up to this many times the chosen count.
@@ -947,7 +958,7 @@ export const register: Register = on => {
         const color = sub.isArchived ? ARCHIVED_COLOR : sub.isRunning ? RUNNING_COLOR : column.tint.slice(0, 7)
         return [{ title: sub.title, start: createdAt, end: sub.isRunning ? now : sub.lastActivityAt, isRunning: sub.isRunning, color }]
       })
-      const withTips = column.key === 'today'
+      const withTips = column.key === 'today' || column === PROGRESS
       const drawing = cardSvg({ hours: activityOf[card.id], metric, lifespans, now, color: column.tint.slice(0, 7), withTips })
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
@@ -973,9 +984,24 @@ export const register: Register = on => {
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 
+      // Hours 00, 06, 12 and 18 start at each quarter of the grid's width.
       return (
-        <Box key="heatmap" paddingX={1}>
-          <Svg alt={drawing.alt} height={drawing.height} source={drawing.source} isInteractive />
+        <Box key="heatmap" flexDirection="row" gap="xs" paddingX={1}>
+          <Box flexShrink={0}>
+            <Svg alt="Days of the week" width={HEATMAP_LABEL_WIDTH} height={drawing.height} source={drawing.days} />
+          </Box>
+          <Box flexDirection="column" flexGrow={1} minWidth={0}>
+            <Svg alt={drawing.alt} height={drawing.height} source={drawing.grid} isInteractive />
+            <Box flexDirection="row" width="100%">
+              {['00', '06', '12', '18'].map(hour => (
+                <Box key={`hour-${hour}`} width="25%">
+                  <Text dimColor size="caption">
+                    {hour}
+                  </Text>
+                </Box>
+              ))}
+            </Box>
+          </Box>
         </Box>
       )
     }
@@ -1037,9 +1063,7 @@ export const register: Register = on => {
             </Box>
             {waitingFor(sub)?.category === 'blocked' && (
               <Box key={`needs-${sub.id}`} flexShrink={0}>
-                <Text color="warning" size="caption">
-                  needs you
-                </Text>
+                <Text color="warning">●</Text>
               </Box>
             )}
             <Box flexGrow={1} />

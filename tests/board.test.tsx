@@ -548,6 +548,10 @@ test('each card with recent transcript entries shows a week of activity, or of t
   expect(source).toContain('<rect x="318" y="2" width="5" height="14"/>')
   const heat = (await ui.findAll({ type: 'Svg' })).find(found => String(found.props.alt).startsWith('Tokens of the sessions shown'))
   expect(heat?.props.isInteractive).toBe(true)
+  // The grid is wider than any pane, so it fills the board's width; its text sits outside it.
+  expect(String(heat?.props.source)).toContain('width="4000"')
+  expect(String(heat?.props.source)).not.toContain('<text')
+  expect(await ui.find({ key: 'hour-18' })).toBeDefined()
 
   await ui.select({ key: 'activity', value: 'hidden' })
   expect(await timelines()).toHaveLength(0)
