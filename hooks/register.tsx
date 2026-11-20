@@ -55,6 +55,7 @@ const settingsPlace = atom({ plugin: 'session-kanban', key: 'settingsPlace' } as
 const weekStart = atom({ plugin: 'session-kanban', key: 'weekStart' } as const, 1)
 const commandKeys = atom({ plugin: 'session-kanban', key: 'commandKeys' } as const, [] as string[])
 const isCommandBarShown = atom({ plugin: 'session-kanban', key: 'isCommandBarShown' } as const, false)
+const commandDraft = atom({ plugin: 'session-kanban', key: 'commandDraft' } as const, null as string[] | null)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
@@ -668,7 +669,6 @@ function later($: EngineInterface, work: () => Promise<unknown>) {
 
 const SETTINGS_PANE = 'session-kanban-settings'
 const SETTINGS_TITLE = 'Board settings'
-// F1 to F12 name the buttons only: the band takes no function keys.
 const COMMAND_KEY_COUNT = 12
 
 // What a command button shows of its command: a slash command's name past its
@@ -695,19 +695,58 @@ async function runCommandKey($: EngineInterface, text: string) {
   }
 }
 
-async function setCommandKey($: EngineInterface, index: number, text: string) {
-  await update($, commandKeys, keys => {
-    const next = Array.from({ length: COMMAND_KEY_COUNT }, (_, at) => keys[at] ?? '')
+// Typing edits a draft, so a half-typed command never shows as a button;
+// Apply, or Enter in a field, puts the draft on the band.
+async function setCommandDraft($: EngineInterface, index: number, text: string) {
+  const keys = await read($, commandKeys)
+  await update($, commandDraft, draft => {
+    const next = Array.from({ length: COMMAND_KEY_COUNT }, (_, at) => (draft ?? keys)[at] ?? '')
     next[index] = text
 
     return next
-  }).then(save($, commandKeys))
+  })
+}
+
+async function applyCommandDraft($: EngineInterface) {
+  const draft = await read($, commandDraft)
+  if (draft === null) return
+  await update($, commandKeys, () => draft).then(save($, commandKeys))
+  await update($, commandDraft, () => null)
+}
+
+type SettingsSection = { key: string; title: string; controls: RenderElement[] }
+
+// A thin line across the slot between two sections: a stretched SVG where
+// one is drawn, a dash run on the terminal.
+function sectionRule($: EngineInterface, e: ResolveInput<'Pane'>, key: string) {
+  if (e.surface === 'terminal') {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>{'─'.repeat(24)}</Text>
+  }
+  const { Svg } = $.ui.resolve(e)
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="1" viewBox="0 0 ${STRETCH_WIDTH} 1" preserveAspectRatio="none"><rect width="${STRETCH_WIDTH}" height="1" fill="#8b8b8b" fill-opacity="0.4"/></svg>`
+
+  return <Svg key={key} source={source} alt="Section separator" height={1} />
+}
+
+// Sections stacked, a bold title over each one's controls, a rule between them.
+function settingsBody($: EngineInterface, e: ResolveInput<'Pane'>, sections: SettingsSection[], extra?: RenderElement) {
+  const { Box, Text } = $.ui.resolve(e)
+
+  return sections.flatMap((section, index) => [
+    ...(index > 0 ? [sectionRule($, e, `rule-${section.key}`)] : []),
+    <Box key={`section-${section.key}`} flexDirection="column" gap="sm" alignItems="flex-start">
+      <Text bold>{section.title}</Text>
+      {section.controls}
+      {section.key === 'commands' && extra}
+    </Box>,
+  ])
 }
 
 // The board's own settings, drawn in the Settings row or in a pane of their
 // own, as `settingsPlace` says. Only desktop and vscode draw a Select; elsewhere
 // a setting is shown, not picked.
-async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Promise<RenderElement[]> {
+async function settingsSections($: EngineInterface, e: ResolveInput<'Pane'>): Promise<SettingsSection[]> {
   const { Text } = $.ui.resolve(e)
   const isMultiline = (await read($, titleMode)) === 'multiline'
   const isSquare = (await read($, cornerStyle)) === 'square'
@@ -717,18 +756,36 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
   const place = await read($, settingsPlace)
   const firstWeekday = await read($, weekStart)
   const barShown = await read($, isCommandBarShown)
-  const keys = await read($, commandKeys)
+  const keys = (await read($, commandDraft)) ?? (await read($, commandKeys))
   if (e.surface !== 'desktop' && e.surface !== 'vscode') {
     return [
-      <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>,
-      <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>,
-      <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>,
-      <Text dimColor>Timelines: {metric === 'entries' ? 'activity' : metric}</Text>,
-      <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>,
-      <Text dimColor>Week starts on: {WEEKDAY_NAMES[firstWeekday]}</Text>,
-      <Text dimColor>Settings: {place === 'pane' ? 'own pane' : 'board row'}</Text>,
-      <Text dimColor>Command buttons: {barShown ? 'shown' : 'hidden'}</Text>,
-      <Text dimColor>(change them on the desktop app)</Text>,
+      {
+        key: 'board',
+        title: 'Board',
+        controls: [
+          <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>,
+          <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>,
+          <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>,
+          <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>,
+        ],
+      },
+      {
+        key: 'timelines',
+        title: 'Timelines',
+        controls: [
+          <Text dimColor>Timelines: {metric === 'entries' ? 'activity' : metric}</Text>,
+          <Text dimColor>Week starts on: {WEEKDAY_NAMES[firstWeekday]}</Text>,
+        ],
+      },
+      { key: 'commands', title: 'Command buttons', controls: [<Text dimColor>Command buttons: {barShown ? 'shown' : 'hidden'}</Text>] },
+      {
+        key: 'place',
+        title: 'Settings',
+        controls: [
+          <Text dimColor>Settings: {place === 'pane' ? 'own pane' : 'board row'}</Text>,
+          <Text dimColor>(change them on the desktop app)</Text>,
+        ],
+      },
     ]
   }
   const { Select, Input } = $.ui.resolve(e)
@@ -736,16 +793,15 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
     ? Array.from({ length: COMMAND_KEY_COUNT }, (_, index) => (
         <Input
           key={`command-key-${index + 1}`}
-          label={`F${index + 1}`}
           placeholder="/plugin:command or a prompt"
           value={keys[index] ?? ''}
-          onInput={(value: string) => void setCommandKey($, index, value)}
-          onSubmit={(value: string) => void setCommandKey($, index, value)}
+          onInput={(value: string) => void setCommandDraft($, index, value)}
+          onSubmit={(value: string) => void setCommandDraft($, index, value).then(() => applyCommandDraft($))}
         />
       ))
     : []
 
-  return [
+  const boardControls = [
     <Select
       key="layout"
       label="Layout"
@@ -777,6 +833,18 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square')).then(save($, cornerStyle))}
     />,
     <Select
+      key="open-in-subs"
+      label="In sub-sessions"
+      options={[
+        { value: 'closed', label: 'Stay closed' },
+        { value: 'open', label: 'Open' },
+      ]}
+      value={opensInSubs ? 'open' : 'closed'}
+      onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
+    />,
+  ]
+  const timelineControls = [
+    <Select
       key="activity"
       label="Timelines"
       options={[
@@ -792,16 +860,6 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       }}
     />,
     <Select
-      key="open-in-subs"
-      label="In sub-sessions"
-      options={[
-        { value: 'closed', label: 'Stay closed' },
-        { value: 'open', label: 'Open' },
-      ]}
-      value={opensInSubs ? 'open' : 'closed'}
-      onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
-    />,
-    <Select
       key="week-start"
       label="Week starts on"
       options={[1, 2, 3, 4, 5, 6, 0].map(day => ({ value: String(day), label: WEEKDAY_NAMES[day] ?? '' }))}
@@ -811,6 +869,21 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
         if (Number.isInteger(day) && day >= 0 && day <= 6) void update($, weekStart, () => day).then(save($, weekStart))
       }}
     />,
+  ]
+  const commandControls = [
+    <Select
+      key="command-bar"
+      label="Show functional buttons"
+      options={[
+        { value: 'hidden', label: 'Hidden' },
+        { value: 'shown', label: 'Shown' },
+      ]}
+      value={barShown ? 'shown' : 'hidden'}
+      onSelect={value => update($, isCommandBarShown, () => value === 'shown').then(save($, isCommandBarShown))}
+    />,
+    ...keyFields,
+  ]
+  const placeControls = [
     // The way back: settings in the board's row, as before they had a pane.
     <Select
       key="settings-place"
@@ -832,18 +905,30 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
         }
       }}
     />,
-    <Select
-      key="command-bar"
-      label="Show functional buttons"
-      options={[
-        { value: 'hidden', label: 'Hidden' },
-        { value: 'shown', label: 'Shown' },
-      ]}
-      value={barShown ? 'shown' : 'hidden'}
-      onSelect={value => update($, isCommandBarShown, () => value === 'shown').then(save($, isCommandBarShown))}
-    />,
-    ...keyFields,
   ]
+
+  return [
+    { key: 'board', title: 'Board', controls: boardControls },
+    { key: 'timelines', title: 'Timelines', controls: timelineControls },
+    { key: 'commands', title: 'Command buttons', controls: commandControls },
+    { key: 'place', title: 'Settings', controls: placeControls },
+  ]
+}
+
+// Apply keeps the settings open: the Selects take effect at once, and Apply
+// puts the typed commands on the band.
+async function applyButton($: EngineInterface, e: ResolveInput<'Pane'>) {
+  const { Button } = $.ui.resolve(e)
+  const isPending = (await read($, commandDraft)) !== null
+
+  return (
+    <Button
+      key="settings-apply"
+      label="Apply"
+      variant={isPending ? 'primary' : 'secondary'}
+      onPress={() => applyCommandDraft($)}
+    />
+  )
 }
 
 // The Settings button: the row folds open under the toolbar, the pane opens
@@ -896,13 +981,12 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap="sm" padding={1}>
-        <Box flexDirection="column" gap="sm" alignItems="flex-start">
-          {await settingsControls($, e)}
-        </Box>
+        {settingsBody($, e, await settingsSections($, e))}
+        {sectionRule($, e, 'rule-footer')}
         <Box flexDirection="row" gap="sm" alignItems="center">
-          <Button key="settings-done" label="Done" onPress={() => $.ui.close({ id: SETTINGS_PANE })} />
+          {await applyButton($, e)}
           <Text dimColor size="caption">
-            Esc closes it too. Choices are kept for new sessions.
+            Esc closes the pane. Choices are kept for new sessions.
           </Text>
         </Box>
       </Box>
@@ -919,9 +1003,11 @@ export const register: Register = on => {
       text.trim() === ''
         ? []
         : [
-            <Button key={`command-key-${index + 1}`} dimColor onPress={() => later($, () => runCommandKey($, text.trim()))}>
-              F{index + 1} <Text dimColor>{commandKeyName(text.trim())}</Text>
-            </Button>,
+            <Button
+              key={`command-key-${index + 1}`}
+              label={commandKeyName(text.trim())}
+              onPress={() => later($, () => runCommandKey($, text.trim()))}
+            />,
           ],
     )
 
@@ -1022,7 +1108,10 @@ export const register: Register = on => {
     const activityOf = metric === 'hidden' ? {} : await read($, activity)
     const firstWeekday = await read($, weekStart)
     const waitingOf = await read($, statuses)
-    const settingsRow = settingsOpen && (await read($, settingsPlace)) === 'row' ? await settingsControls($, e) : null
+    const settingsRow =
+      settingsOpen && (await read($, settingsPlace)) === 'row'
+        ? settingsBody($, e, await settingsSections($, e), await applyButton($, e))
+        : null
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -1501,7 +1590,7 @@ export const register: Register = on => {
           />
         </Box>
         {settingsRow && (
-          <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
+          <Box flexDirection="column" gap="sm">
             {settingsRow}
           </Box>
         )}

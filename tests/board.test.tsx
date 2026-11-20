@@ -693,16 +693,26 @@ test('command buttons above the prompt run what Settings gives them, as typed', 
   expect(await band.find({ key: 'command-keys-setup' })).toBeDefined()
 
   const pane = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
-  expect((await pane.find({ key: 'command-key-12' }))?.props.label).toBe('F12')
-  await pane.input({ key: 'command-key-1', text: '/session:close-out' })
-  await pane.input({ key: 'command-key-3', text: 'Summarize the diff' })
+  // Sections, each titled, with a rule between them.
+  expect((await pane.find({ type: 'Text', text: 'Command buttons' }))?.text).toBe('Command buttons')
+  // Three between the four sections, one over Apply.
+  expect((await pane.findAll({ type: 'Svg' })).map(svg => svg.props.alt)).toEqual(Array(4).fill('Section separator'))
+  expect(await pane.find({ key: 'command-key-12' })).toBeDefined()
+  await pane.input({ key: 'command-key-1', text: '/session:close-out', kind: 'change' })
+  await pane.input({ key: 'command-key-3', text: 'Summarize the diff', kind: 'change' })
+  // Typing alone puts nothing on the band.
+  expect(await band.find({ key: 'command-key-1' })).toBeUndefined()
+  expect(stored.get('commandKeys')).toBeUndefined()
+  await pane.press({ key: 'settings-apply' })
+  // Apply leaves the pane open.
+  expect(await pane.find({ key: 'command-key-1' })).toBeDefined()
   await pane.unmount()
   expect(stored.get('commandKeys')).toEqual(['/session:close-out', '', 'Summarize the diff', '', '', '', '', '', '', '', '', ''])
 
-  // Empty slots are left out; each button keeps its F number.
-  expect((await band.find({ key: 'command-key-1' }))?.text).toBe('F1 close-out')
+  // Empty slots are left out; a button shows its command's name only.
+  expect((await band.find({ key: 'command-key-1' }))?.text).toBe('close-out')
   expect(await band.find({ key: 'command-key-2' })).toBeUndefined()
-  expect((await band.find({ key: 'command-key-3' }))?.text).toBe('F3 Summarize the diff')
+  expect((await band.find({ key: 'command-key-3' }))?.text).toBe('Summarize the diff')
   await band.press({ key: 'command-key-1' })
   await band.press({ key: 'command-key-3' })
   await clock.advance(1)
