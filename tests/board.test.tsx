@@ -662,3 +662,54 @@ test('Settings opens a pane of its own, and can go back to the board row', async
   expect(await ui.find({ key: 'layout' })).toBeUndefined()
   await ui.unmount()
 })
+
+const BAND = {
+  plugin: 'session-kanban',
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10 }, view: {} },
+} as const
+
+test('command buttons above the prompt run what Settings gives them, as typed', async ($, on) => {
+  const stored = store(on)
+  const ran: string[] = []
+  const prompts: string[] = []
+  on('command.run', (_, e) => {
+    ran.push(`${e.command}|${e.args}`)
+    return {}
+  })
+  on('prompt.submit', (_, e) => {
+    prompts.push(e.text)
+    return { text: e.text }
+  })
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // Off until Settings shows them.
+  expect(await band.find({ type: 'Button' })).toBeUndefined()
+  await pick($, 'command-bar', 'shown')
+  expect(stored.get('isCommandBarShown')).toBe(true)
+  expect(await band.find({ type: 'Text', text: 'No commands yet.' })).toBeDefined()
+  expect(await band.find({ key: 'command-keys-setup' })).toBeDefined()
+
+  const pane = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
+  expect((await pane.find({ key: 'command-key-12' }))?.props.label).toBe('F12')
+  await pane.input({ key: 'command-key-1', text: '/session:close-out' })
+  await pane.input({ key: 'command-key-3', text: 'Summarize the diff' })
+  await pane.unmount()
+  expect(stored.get('commandKeys')).toEqual(['/session:close-out', '', 'Summarize the diff', '', '', '', '', '', '', '', '', ''])
+
+  // Empty slots are left out; each button keeps its F number.
+  expect((await band.find({ key: 'command-key-1' }))?.text).toBe('F1 close-out')
+  expect(await band.find({ key: 'command-key-2' })).toBeUndefined()
+  expect((await band.find({ key: 'command-key-3' }))?.text).toBe('F3 Summarize the diff')
+  await band.press({ key: 'command-key-1' })
+  await band.press({ key: 'command-key-3' })
+  await clock.advance(1)
+  expect(ran).toContain('session:close-out|')
+  expect(prompts).toEqual(['Summarize the diff'])
+
+  await pick($, 'command-bar', 'hidden')
+  expect(await band.find({ type: 'Button' })).toBeUndefined()
+  await band.unmount()
+})

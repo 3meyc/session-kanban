@@ -53,6 +53,8 @@ const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } 
 const settingsPlace = atom({ plugin: 'session-kanban', key: 'settingsPlace' } as const, 'pane' as SettingsPlace)
 // The first day of the week, as Date.getDay(): Monday unless picked otherwise.
 const weekStart = atom({ plugin: 'session-kanban', key: 'weekStart' } as const, 1)
+const commandKeys = atom({ plugin: 'session-kanban', key: 'commandKeys' } as const, [] as string[])
+const isCommandBarShown = atom({ plugin: 'session-kanban', key: 'isCommandBarShown' } as const, false)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
@@ -92,6 +94,10 @@ async function restoreSettings($: EngineInterface) {
   await saved($, activityMetric).then(value => update($, activityMetric, current => value ?? current))
   await saved($, settingsPlace).then(value => update($, settingsPlace, current => value ?? current))
   await saved($, weekStart).then(value => update($, weekStart, current => value ?? current))
+  await saved($, isCommandBarShown).then(value => update($, isCommandBarShown, current => value ?? current))
+  await saved($, commandKeys).then(value =>
+    update($, commandKeys, current => (Array.isArray(value) ? value.map(text => (typeof text === 'string' ? text : '')) : current)),
+  )
 }
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
@@ -662,6 +668,41 @@ function later($: EngineInterface, work: () => Promise<unknown>) {
 
 const SETTINGS_PANE = 'session-kanban-settings'
 const SETTINGS_TITLE = 'Board settings'
+// F1 to F12 name the buttons only: the band takes no function keys.
+const COMMAND_KEY_COUNT = 12
+
+// What a command button shows of its command: a slash command's name past its
+// plugin prefix (`/session:close-out` → close-out), else the prompt's start.
+function commandKeyName(text: string) {
+  const slash = /^\/(?:[\w-]+:)?([\w-]+)/.exec(text)
+  if (slash?.[1]) return slash[1]
+
+  return text.length > 18 ? `${text.slice(0, 17)}…` : text
+}
+
+// Runs a button's command as if typed: `/name args` as that slash command,
+// anything else as a prompt. Both wait for the session to be idle.
+async function runCommandKey($: EngineInterface, text: string) {
+  const slash = /^\/(\S+)\s*([\s\S]*)$/.exec(text)
+  try {
+    if (slash?.[1]) {
+      await $.command.run({ command: slash[1], args: slash[2] ?? '' })
+    } else {
+      await $.prompt.submit({ text })
+    }
+  } catch (error) {
+    $.ui.toast(`Could not run ${text}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function setCommandKey($: EngineInterface, index: number, text: string) {
+  await update($, commandKeys, keys => {
+    const next = Array.from({ length: COMMAND_KEY_COUNT }, (_, at) => keys[at] ?? '')
+    next[index] = text
+
+    return next
+  }).then(save($, commandKeys))
+}
 
 // The board's own settings, drawn in the Settings row or in a pane of their
 // own, as `settingsPlace` says. Only desktop and vscode draw a Select; elsewhere
@@ -675,6 +716,8 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
   const metric = await read($, activityMetric)
   const place = await read($, settingsPlace)
   const firstWeekday = await read($, weekStart)
+  const barShown = await read($, isCommandBarShown)
+  const keys = await read($, commandKeys)
   if (e.surface !== 'desktop' && e.surface !== 'vscode') {
     return [
       <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>,
@@ -684,10 +727,23 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>,
       <Text dimColor>Week starts on: {WEEKDAY_NAMES[firstWeekday]}</Text>,
       <Text dimColor>Settings: {place === 'pane' ? 'own pane' : 'board row'}</Text>,
+      <Text dimColor>Command buttons: {barShown ? 'shown' : 'hidden'}</Text>,
       <Text dimColor>(change them on the desktop app)</Text>,
     ]
   }
-  const { Select } = $.ui.resolve(e)
+  const { Select, Input } = $.ui.resolve(e)
+  const keyFields = barShown
+    ? Array.from({ length: COMMAND_KEY_COUNT }, (_, index) => (
+        <Input
+          key={`command-key-${index + 1}`}
+          label={`F${index + 1}`}
+          placeholder="/plugin:command or a prompt"
+          value={keys[index] ?? ''}
+          onInput={(value: string) => void setCommandKey($, index, value)}
+          onSubmit={(value: string) => void setCommandKey($, index, value)}
+        />
+      ))
+    : []
 
   return [
     <Select
@@ -776,6 +832,17 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
         }
       }}
     />,
+    <Select
+      key="command-bar"
+      label="Show functional buttons"
+      options={[
+        { value: 'hidden', label: 'Hidden' },
+        { value: 'shown', label: 'Shown' },
+      ]}
+      value={barShown ? 'shown' : 'hidden'}
+      onSelect={value => update($, isCommandBarShown, () => value === 'shown').then(save($, isCommandBarShown))}
+    />,
+    ...keyFields,
   ]
 }
 
@@ -838,6 +905,36 @@ export const register: Register = on => {
             Esc closes it too. Choices are kept for new sessions.
           </Text>
         </Box>
+      </Box>
+    )
+  })
+
+  // The command buttons, in every session while Settings shows them; a survey
+  // takes the band over.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !(await read($, isCommandBarShown))) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const keys = (await read($, commandKeys)).slice(0, COMMAND_KEY_COUNT)
+    const buttons = keys.flatMap((text, index) =>
+      text.trim() === ''
+        ? []
+        : [
+            <Button key={`command-key-${index + 1}`} dimColor onPress={() => later($, () => runCommandKey($, text.trim()))}>
+              F{index + 1} <Text dimColor>{commandKeyName(text.trim())}</Text>
+            </Button>,
+          ],
+    )
+
+    return (
+      <Box flexDirection="row" gap="xs" alignItems="center">
+        {buttons.length > 0 ? buttons : <Text dimColor>No commands yet.</Text>}
+        {buttons.length === 0 && (
+          <Button
+            key="command-keys-setup"
+            label="Set up"
+            onPress={() => $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })}
+          />
+        )}
       </Box>
     )
   })

@@ -64,6 +64,10 @@ declare module 'claude-code' {
       settingsPlace: SettingsPlace
       // The first day of the week, as Date.getDay() numbers it (0 Sunday … 6 Saturday).
       weekStart: number
+      // The command buttons above the prompt, F1 first: what each runs as typed,
+      // a slash command or a prompt; '' leaves that button out.
+      commandKeys: string[]
+      isCommandBarShown: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle
       isOpenInSubs: boolean
