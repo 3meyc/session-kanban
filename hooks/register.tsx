@@ -1057,10 +1057,18 @@ export const register: Register = on => {
             <Svg alt={drawing.alt} height={drawing.height} source={drawing.grid} />
             <Box flexDirection="row" width="100%">
               {['00', '06', '12', '18'].map(hour => (
-                <Box key={`hour-${hour}`} width="25%">
+                <Box key={`hour-${hour}`} width="25%" flexDirection="row" justifyContent="space-between">
                   <Text dimColor size="caption">
                     {hour}
                   </Text>
+                  {/* The last quarter also names where the day ends, at the grid's right edge. */}
+                  {hour === '18' && (
+                    <Box key="hour-24">
+                      <Text dimColor size="caption">
+                        24
+                      </Text>
+                    </Box>
+                  )}
                 </Box>
               ))}
             </Box>

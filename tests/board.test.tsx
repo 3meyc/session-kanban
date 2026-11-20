@@ -563,6 +563,7 @@ test('each card with recent transcript entries shows a week of activity, or of t
   expect(String(heat?.props.source)).toContain('width="4000"')
   expect(String(heat?.props.source)).not.toContain('<text')
   expect(await ui.find({ key: 'hour-18' })).toBeDefined()
+  expect(await ui.find({ key: 'hour-24' })).toBeDefined()
   expect(heat?.props.alt).toBe('Tokens of the sessions shown, by day and hour: busy in 3 of 168 hours in the last 7 days')
   // The last 7 days in the week's order, Monday first; 2026-11-03 is a Tuesday, so it is the brighter day.
   const dayNames = async () => {
