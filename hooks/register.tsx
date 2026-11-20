@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Atom, EngineInterface, Register, RenderElement } from 'claude-code'
+import type { Atom, EngineInterface, Register, RenderElement, ResolveInput } from 'claude-code'
 
 import type {
   Activity,
@@ -10,6 +10,7 @@ import type {
   Failure,
   HourCounts,
   LayoutMode,
+  SettingsPlace,
   TitleMode,
   TurnStatus,
 } from '../types'
@@ -49,6 +50,7 @@ const archivedShownIn = atom({ plugin: 'session-kanban', key: 'archivedShownIn' 
 // Only the sections someone opened or closed by hand; the rest follow their default.
 const openSections = atom({ plugin: 'session-kanban', key: 'openSections' } as const, {} as Record<string, boolean>)
 const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } as const, false)
+const settingsPlace = atom({ plugin: 'session-kanban', key: 'settingsPlace' } as const, 'pane' as SettingsPlace)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
@@ -86,6 +88,7 @@ async function restoreSettings($: EngineInterface) {
   await saved($, isOpenInSubs).then(value => update($, isOpenInSubs, current => value ?? current))
   await saved($, layoutMode).then(value => update($, layoutMode, current => value ?? current))
   await saved($, activityMetric).then(value => update($, activityMetric, current => value ?? current))
+  await saved($, settingsPlace).then(value => update($, settingsPlace, current => value ?? current))
 }
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
@@ -301,39 +304,16 @@ function unescapeJson(text: string): string {
   }
 }
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-function clockTime(ms: number): string {
-  const at = new Date(ms)
-  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-}
-
-function dayTime(ms: number): string {
-  return `${WEEKDAYS[new Date(ms).getDay()]} ${clockTime(ms)}`
-}
-
-function tokenCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
-  if (count >= 1_000) return `${Math.round(count / 1_000)}k`
-  return String(count)
-}
-
-// Titles go into SVG markup as text.
-function escapeXml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
+// The heatmap's rows: the working week, Monday first.
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 function measureOf(counts: HourCounts, metric: ActivityMetric): number {
   return metric === 'tokens' ? counts[1] : counts[0]
 }
 
-function countsLabel(counts: HourCounts): string {
-  return `${counts[0]} entries · ${tokenCount(counts[1])} tokens (${tokenCount(counts[2])} output)`
-}
-
 // A sub-session's span on its parent's timeline, from its start to its last
 // activity, or to now while it runs.
-type Lifespan = { title: string; start: number; end: number; isRunning: boolean; color: string }
+type Lifespan = { start: number; end: number; color: string }
 
 const LIFESPAN_HEIGHT = 3
 const LIFESPAN_GAP = 2
@@ -344,18 +324,16 @@ const ARCHIVED_COLOR = '#9ca3af'
 
 // One card's drawing on one time axis, the last week: a bar per three hours,
 // as tall as its share of the card's busiest bar, then a row per sub-session's
-// lifespan, with a tick at each local midnight across both. With `withTips`
-// each bar and row carries a tooltip (the Svg is then drawn interactive).
-// Null when there is nothing to draw.
+// lifespan, with a tick at each local midnight across both. Null when there is
+// nothing to draw.
 function cardSvg(input: {
   hours: Record<string, HourCounts> | undefined
   metric: ActivityMetric
   lifespans: Lifespan[]
   now: number
   color: string
-  withTips: boolean
 }): { source: string; alt: string; height: number } | null {
-  const { metric, lifespans, now, color, withTips } = input
+  const { metric, lifespans, now, color } = input
   const start = now - WEEK_MS
   const bins = Array.from({ length: ACTIVITY_BINS }, (): HourCounts => [0, 0, 0])
   for (const [hour, counts] of Object.entries(input.hours ?? {})) {
@@ -368,7 +346,6 @@ function cardSvg(input: {
   if (peak === 0 && shown.length === 0) return null
   const width = ACTIVITY_BINS * ACTIVITY_BAR_WIDTH
   const toX = (at: number) => Math.max(0, ((at - start) / ACTIVITY_BIN_MS) * ACTIVITY_BAR_WIDTH)
-  const tip = (text: string) => (withTips ? `<title>${escapeXml(text)}</title>` : '')
   const timelineHeight = peak > 0 ? ACTIVITY_HEIGHT : 0
   const spansTop = timelineHeight > 0 ? timelineHeight + LIFESPAN_GAP + 1 : 0
   const height = shown.length > 0 ? spansTop + shown.length * (LIFESPAN_HEIGHT + LIFESPAN_GAP) - LIFESPAN_GAP : timelineHeight
@@ -379,24 +356,14 @@ function cardSvg(input: {
     if (value === 0 || peak === 0) return []
     busySpans++
     const barHeight = Math.max(2, Math.round((value / peak) * (ACTIVITY_HEIGHT - 2)))
-    const x = index * ACTIVITY_BAR_WIDTH
-    const binStart = start + index * ACTIVITY_BIN_MS
-    const bar = `<rect x="${x}" y="${ACTIVITY_HEIGHT - barHeight}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${barHeight}"/>`
-    // The whole column takes the pointer, so a short bar is as easy to hover as a tall one.
-    return withTips
-      ? [
-          `<g>${tip(`${dayTime(binStart)}–${clockTime(binStart + ACTIVITY_BIN_MS)} · ${countsLabel(bin)}`)}` +
-            `<rect x="${x}" y="0" width="${ACTIVITY_BAR_WIDTH}" height="${ACTIVITY_HEIGHT}" fill="transparent" class="hit"/>${bar}</g>`,
-        ]
-      : [bar]
+    return [`<rect x="${index * ACTIVITY_BAR_WIDTH}" y="${ACTIVITY_HEIGHT - barHeight}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${barHeight}"/>`]
   })
   const rows = shown.map((span, index) => {
     const y = spansTop + index * (LIFESPAN_HEIGHT + LIFESPAN_GAP)
     const x = toX(span.start)
     const spanWidth = Math.max(2, toX(span.end) - x)
-    const label = `${span.title} · ${dayTime(span.start)} – ${span.isRunning ? 'now' : dayTime(span.end)}`
 
-    return `<g>${tip(label)}<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}" class="span"/></g>`
+    return `<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}"/>`
   })
   const ticks: string[] = []
   const midnight = new Date(start)
@@ -406,11 +373,9 @@ function cardSvg(input: {
     ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}"/>`)
   }
   const baseline = timelineHeight > 0 ? `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` : ''
-  // The span under the pointer lights up, so a hover shows even before its tooltip.
-  const hover = withTips ? `<style>g:hover>.hit{fill:${color};fill-opacity:0.25}g:hover>.span{stroke:${color};stroke-width:1}</style>` : ''
   const source =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
-    `${hover}${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
+    `${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
     `<g fill="${color}">${bars.join('')}</g>${rows.join('')}</svg>`
   const measured = metric === 'tokens' ? 'tokens' : 'activity'
   const alt = [
@@ -428,11 +393,13 @@ const HEATMAP_PITCH = 12
 const HEATMAP_LABEL_WIDTH = 28
 const HEATMAP_COLOR = '#3b82f6'
 const HEATMAP_TEXT = '#8b8b8b'
+const HEATMAP_TODAY_TEXT = '#d4d4d4'
 
-// The whole board's week as a grid: a row per local day, today last, and a
-// column per local hour, shaded by the sum over the sessions shown, with a
-// tooltip per hour. The grid stretches to the board's width, so its text would
-// stretch too: the day names are a drawing of their own, the hours are Text.
+// The whole board's working week as a grid: a row per local day from Monday to
+// Sunday, and a column per local hour, shaded by the sum over the sessions
+// shown; days still to come are left blank and today's name is brighter. The
+// grid stretches to the board's width, so its text would stretch too: the day
+// names are a drawing of their own, the hours are Text.
 function heatmapSvg(
   perHour: Map<number, HourCounts>,
   metric: ActivityMetric,
@@ -440,8 +407,9 @@ function heatmapSvg(
 ): { grid: string; days: string; alt: string; height: number } | null {
   const today = new Date(now)
   today.setHours(0, 0, 0, 0)
+  const todayRow = (today.getDay() + 6) % 7
   const firstDay = new Date(today)
-  firstDay.setDate(firstDay.getDate() - 6)
+  firstDay.setDate(firstDay.getDate() - todayRow)
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, (): HourCounts => [0, 0, 0]))
   for (const [at, counts] of perHour) {
     const day = new Date(at)
@@ -459,27 +427,24 @@ function heatmapSvg(
   const dayParts: string[] = []
   let busyHours = 0
   cells.forEach((row, rowIndex) => {
-    const day = new Date(firstDay)
-    day.setDate(day.getDate() + rowIndex)
     const y = rowIndex * HEATMAP_PITCH
-    dayParts.push(`<text x="0" y="${y + 9}">${WEEKDAYS[day.getDay()]}</text>`)
+    const nameColor = rowIndex === todayRow ? HEATMAP_TODAY_TEXT : HEATMAP_TEXT
+    dayParts.push(`<text x="0" y="${y + 9}" fill="${nameColor}">${WEEK_DAYS[rowIndex]}</text>`)
     row.forEach((cell, hour) => {
       const value = measureOf(cell, metric)
       if (value > 0) busyHours++
-      const opacity = value === 0 ? 0.07 : 0.2 + 0.8 * Math.sqrt(value / peak)
-      const label = `${WEEKDAYS[day.getDay()]} ${String(hour).padStart(2, '0')}:00 · ${value === 0 ? 'nothing' : countsLabel(cell)}`
+      const opacity = value > 0 ? 0.2 + 0.8 * Math.sqrt(value / peak) : rowIndex > todayRow ? 0.03 : 0.07
       cellParts.push(
-        `<g><title>${escapeXml(label)}</title><rect x="${hour * HEATMAP_PITCH}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill-opacity="${opacity.toFixed(2)}"/></g>`,
+        `<rect x="${hour * HEATMAP_PITCH}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill-opacity="${opacity.toFixed(2)}"/>`,
       )
     })
   })
   const grid =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
-    `<style>g:hover>rect{fill-opacity:1;stroke:${HEATMAP_TEXT};stroke-width:1}</style>` +
     `<g fill="${HEATMAP_COLOR}">${cellParts.join('')}</g></svg>`
   const days =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${HEATMAP_LABEL_WIDTH}" height="${height}" viewBox="0 0 ${HEATMAP_LABEL_WIDTH} ${height}">` +
-    `<g font-family="-apple-system, system-ui, sans-serif" font-size="9" fill="${HEATMAP_TEXT}">${dayParts.join('')}</g></svg>`
+    `<g font-family="-apple-system, system-ui, sans-serif" font-size="9">${dayParts.join('')}</g></svg>`
   const measured = metric === 'tokens' ? 'Tokens' : 'Activity'
 
   return { grid, days, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours this week`, height }
@@ -688,6 +653,128 @@ function later($: EngineInterface, work: () => Promise<unknown>) {
   $.clock.after(0, () => void work())
 }
 
+const SETTINGS_PANE = 'session-kanban-settings'
+const SETTINGS_TITLE = 'Board settings'
+
+// The board's own settings, drawn in the Settings row or in a pane of their
+// own, as `settingsPlace` says. Only desktop and vscode draw a Select; elsewhere
+// a setting is shown, not picked.
+async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Promise<RenderElement[]> {
+  const { Text } = $.ui.resolve(e)
+  const isMultiline = (await read($, titleMode)) === 'multiline'
+  const isSquare = (await read($, cornerStyle)) === 'square'
+  const isStacked = (await read($, layoutMode)) === 'stacked'
+  const opensInSubs = await read($, isOpenInSubs)
+  const metric = await read($, activityMetric)
+  const place = await read($, settingsPlace)
+  if (e.surface !== 'desktop' && e.surface !== 'vscode') {
+    return [
+      <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>,
+      <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>,
+      <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>,
+      <Text dimColor>Timelines: {metric === 'entries' ? 'activity' : metric}</Text>,
+      <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>,
+      <Text dimColor>Settings: {place === 'pane' ? 'own pane' : 'board row'}</Text>,
+      <Text dimColor>(change them on the desktop app)</Text>,
+    ]
+  }
+  const { Select } = $.ui.resolve(e)
+
+  return [
+    <Select
+      key="layout"
+      label="Layout"
+      options={[
+        { value: 'columns', label: 'Columns' },
+        { value: 'stacked', label: 'Stacked' },
+      ]}
+      value={isStacked ? 'stacked' : 'columns'}
+      onSelect={value => update($, layoutMode, () => (value === 'stacked' ? 'stacked' : 'columns')).then(save($, layoutMode))}
+    />,
+    <Select
+      key="title-mode"
+      label="Titles"
+      options={[
+        { value: 'ellipsis', label: 'One line (…)' },
+        { value: 'multiline', label: 'Multiline' },
+      ]}
+      value={isMultiline ? 'multiline' : 'ellipsis'}
+      onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis')).then(save($, titleMode))}
+    />,
+    <Select
+      key="corners"
+      label="Corners"
+      options={[
+        { value: 'square', label: 'Square' },
+        { value: 'rounded', label: 'Rounded' },
+      ]}
+      value={isSquare ? 'square' : 'rounded'}
+      onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square')).then(save($, cornerStyle))}
+    />,
+    <Select
+      key="activity"
+      label="Timelines"
+      options={[
+        { value: 'entries', label: 'Activity' },
+        { value: 'tokens', label: 'Tokens' },
+        { value: 'hidden', label: 'Hidden' },
+      ]}
+      value={metric}
+      onSelect={value => {
+        const next: ActivityMetric = value === 'tokens' ? 'tokens' : value === 'hidden' ? 'hidden' : 'entries'
+        void update($, activityMetric, () => next).then(save($, activityMetric))
+        if (metric === 'hidden' && next !== 'hidden') later($, () => refresh($))
+      }}
+    />,
+    <Select
+      key="open-in-subs"
+      label="In sub-sessions"
+      options={[
+        { value: 'closed', label: 'Stay closed' },
+        { value: 'open', label: 'Open' },
+      ]}
+      value={opensInSubs ? 'open' : 'closed'}
+      onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
+    />,
+    // The way back: settings in the board's row, as before they had a pane.
+    <Select
+      key="settings-place"
+      label="Settings in"
+      options={[
+        { value: 'pane', label: 'Own pane' },
+        { value: 'row', label: 'Board row' },
+      ]}
+      value={place}
+      onSelect={value => {
+        const next: SettingsPlace = value === 'row' ? 'row' : 'pane'
+        void update($, settingsPlace, () => next).then(save($, settingsPlace))
+        if (next === 'row') {
+          void update($, isSettingsOpen, () => true)
+          void $.ui.close({ id: SETTINGS_PANE })
+        } else {
+          void update($, isSettingsOpen, () => false)
+          void $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })
+        }
+      }}
+    />,
+  ]
+}
+
+// The Settings button: the row folds open under the toolbar, the pane opens
+// as a tab of its own, or closes when it is the one shown.
+async function toggleSettings($: EngineInterface) {
+  if ((await read($, settingsPlace)) === 'row') {
+    await update($, isSettingsOpen, isOn => !isOn)
+    return
+  }
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === SETTINGS_PANE && pane.isShown)) {
+    await $.ui.close({ id: SETTINGS_PANE })
+    return
+  }
+  await $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -716,6 +803,24 @@ export const register: Register = on => {
     later($, () => refresh($))
 
     return { text: 'Sessions board opened.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="column" gap="sm" padding={1}>
+        <Box flexDirection="column" gap="sm" alignItems="flex-start">
+          {await settingsControls($, e)}
+        </Box>
+        <Box flexDirection="row" gap="sm" alignItems="center">
+          <Button key="settings-done" label="Done" onPress={() => $.ui.close({ id: SETTINGS_PANE })} />
+          <Text dimColor size="caption">
+            Esc closes it too. Choices are kept for new sessions.
+          </Text>
+        </Box>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -795,19 +900,12 @@ export const register: Register = on => {
     // The session this board runs in takes its column's own hue, a step stronger than the column.
     const currentFill = (column: Column) => `${column.tint.slice(0, 7)}40`
 
-    // Only desktop and vscode draw a Select; elsewhere a setting is shown, not picked.
-    const canPick = e.surface === 'desktop' || e.surface === 'vscode'
+    // Only desktop and vscode draw a Select; elsewhere a choice is shown, not picked.
     let filterControl = <Text dimColor>Section: {options.find(option => option.value === selected)?.label}</Text>
-    let titleControl = <Text dimColor>Titles: {isMultiline ? 'multiline' : 'one line'}</Text>
-    let cornerControl = <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>
-    let layoutControl = <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>
-    const opensInSubs = await read($, isOpenInSubs)
-    let subsControl = <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>
     const metric = await read($, activityMetric)
     const activityOf = metric === 'hidden' ? {} : await read($, activity)
     const waitingOf = await read($, statuses)
-    const metricLabel = metric === 'tokens' ? 'tokens' : metric === 'hidden' ? 'hidden' : 'activity'
-    let activityControl = <Text dimColor>Timelines: {metricLabel}</Text>
+    const settingsRow = settingsOpen && (await read($, settingsPlace)) === 'row' ? await settingsControls($, e) : null
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -843,71 +941,6 @@ export const register: Register = on => {
           options={options}
           value={selected}
           onSelect={value => update($, filter, () => value).then(save($, filter))}
-        />
-      )
-      titleControl = (
-        <Select
-          key="title-mode"
-          label="Titles"
-          options={[
-            { value: 'ellipsis', label: 'One line (…)' },
-            { value: 'multiline', label: 'Multiline' },
-          ]}
-          value={isMultiline ? 'multiline' : 'ellipsis'}
-          onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis')).then(save($, titleMode))}
-        />
-      )
-      activityControl = (
-        <Select
-          key="activity"
-          label="Timelines"
-          options={[
-            { value: 'entries', label: 'Activity' },
-            { value: 'tokens', label: 'Tokens' },
-            { value: 'hidden', label: 'Hidden' },
-          ]}
-          value={metric}
-          onSelect={value => {
-            const next: ActivityMetric = value === 'tokens' ? 'tokens' : value === 'hidden' ? 'hidden' : 'entries'
-            void update($, activityMetric, () => next).then(save($, activityMetric))
-            if (metric === 'hidden' && next !== 'hidden') later($, () => refresh($))
-          }}
-        />
-      )
-      subsControl = (
-        <Select
-          key="open-in-subs"
-          label="In sub-sessions"
-          options={[
-            { value: 'closed', label: 'Stay closed' },
-            { value: 'open', label: 'Open' },
-          ]}
-          value={opensInSubs ? 'open' : 'closed'}
-          onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
-        />
-      )
-      cornerControl = (
-        <Select
-          key="corners"
-          label="Corners"
-          options={[
-            { value: 'square', label: 'Square' },
-            { value: 'rounded', label: 'Rounded' },
-          ]}
-          value={isSquare ? 'square' : 'rounded'}
-          onSelect={value => update($, cornerStyle, () => (value === 'rounded' ? 'rounded' : 'square')).then(save($, cornerStyle))}
-        />
-      )
-      layoutControl = (
-        <Select
-          key="layout"
-          label="Layout"
-          options={[
-            { value: 'columns', label: 'Columns' },
-            { value: 'stacked', label: 'Stacked' },
-          ]}
-          value={isStacked ? 'stacked' : 'columns'}
-          onSelect={value => update($, layoutMode, () => (value === 'stacked' ? 'stacked' : 'columns')).then(save($, layoutMode))}
         />
       )
     }
@@ -947,25 +980,34 @@ export const register: Register = on => {
 
     // What a session's last turn left for the person, while it is not running again.
     const waitingFor = (card: Card) => (card.isRunning || card.isArchived ? undefined : waitingOf[card.id])
+    // Orange when the session is blocked on you, blue when it is done and ready for review.
+    const waitingDot = (card: Card) => {
+      const waiting = waitingFor(card)
+      if (!waiting) return null
 
-    // The terminal has no Svg; its board goes without timelines. Today's cards
-    // carry tooltips: each is a sandboxed frame, so not every card gets one.
+      return (
+        <Box key={`needs-${card.id}`} flexShrink={0}>
+          <Text color={waiting.category === 'blocked' ? 'warning' : 'suggestion'}>●</Text>
+        </Box>
+      )
+    }
+
+    // The terminal has no Svg; its board goes without timelines.
     const timelineOf = (card: Card, column: Column, subs: Card[]) => {
       if (metric === 'hidden' || e.surface === 'terminal') return null
       const lifespans = subs.flatMap((sub): Lifespan[] => {
         const createdAt = known[sub.id]?.createdAt
         if (createdAt === undefined) return []
         const color = sub.isArchived ? ARCHIVED_COLOR : sub.isRunning ? RUNNING_COLOR : column.tint.slice(0, 7)
-        return [{ title: sub.title, start: createdAt, end: sub.isRunning ? now : sub.lastActivityAt, isRunning: sub.isRunning, color }]
+        return [{ start: createdAt, end: sub.isRunning ? now : sub.lastActivityAt, color }]
       })
-      const withTips = column.key === 'today' || column === PROGRESS
-      const drawing = cardSvg({ hours: activityOf[card.id], metric, lifespans, now, color: column.tint.slice(0, 7), withTips })
+      const drawing = cardSvg({ hours: activityOf[card.id], metric, lifespans, now, color: column.tint.slice(0, 7) })
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 
       return (
         <Box key={`activity-${card.id}`} paddingLeft={inset} marginTop="xs">
-          <Svg alt={drawing.alt} height={drawing.height} source={drawing.source} isInteractive={withTips || undefined} />
+          <Svg alt={drawing.alt} height={drawing.height} source={drawing.source} />
         </Box>
       )
     }
@@ -984,14 +1026,15 @@ export const register: Register = on => {
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 
-      // Hours 00, 06, 12 and 18 start at each quarter of the grid's width.
+      // Hours 00, 06, 12 and 18 start at each quarter of the grid's width. The row
+      // is top-aligned: centred, the day names sat half a row below their cells.
       return (
-        <Box key="heatmap" flexDirection="row" gap="xs" paddingX={1}>
+        <Box key="heatmap" flexDirection="row" gap="xs" paddingX={1} alignItems="flex-start">
           <Box flexShrink={0}>
             <Svg alt="Days of the week" width={HEATMAP_LABEL_WIDTH} height={drawing.height} source={drawing.days} />
           </Box>
           <Box flexDirection="column" flexGrow={1} minWidth={0}>
-            <Svg alt={drawing.alt} height={drawing.height} source={drawing.grid} isInteractive />
+            <Svg alt={drawing.alt} height={drawing.height} source={drawing.grid} />
             <Box flexDirection="row" width="100%">
               {['00', '06', '12', '18'].map(hour => (
                 <Box key={`hour-${hour}`} width="25%">
@@ -1061,11 +1104,7 @@ export const register: Register = on => {
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
               {titleOf(sub, sub.isArchived)}
             </Box>
-            {waitingFor(sub)?.category === 'blocked' && (
-              <Box key={`needs-${sub.id}`} flexShrink={0}>
-                <Text color="warning">●</Text>
-              </Box>
-            )}
+            {waitingDot(sub)}
             <Box flexGrow={1} />
             {openIcon(sub)}
           </Box>
@@ -1148,7 +1187,6 @@ export const register: Register = on => {
       const seen = new Set([card.id])
       const showsArchived = shownIn[card.id] === true
       const firstLevel = listedBelow(card.id, seen, showsArchived)
-      const waiting = waitingFor(card)
 
       return (
         <Box
@@ -1171,6 +1209,7 @@ export const register: Register = on => {
                 {titleOf(card)}
               </Box>
             </Box>
+            {waitingDot(card)}
             {openIcon(card)}
             <Box flexGrow={1} />
             {tag && (
@@ -1186,22 +1225,6 @@ export const register: Register = on => {
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>
-          {waiting && (
-            <Box key={`needs-${card.id}`} flexDirection="row" gap="xs" alignItems="flex-start" paddingLeft={inset}>
-              <Box flexShrink={0}>
-                <Text color={waiting.category === 'blocked' ? 'warning' : 'suggestion'} size="caption" bold>
-                  {waiting.category === 'blocked' ? '● Needs you' : '● Ready for review'}
-                </Text>
-              </Box>
-              {waiting.needsAction !== '' && (
-                <Box flexShrink={1} minWidth={0}>
-                  <Text dimColor size="caption" wrap={isMultiline ? 'wrap' : 'truncate-end'}>
-                    {waiting.needsAction}
-                  </Text>
-                </Box>
-              )}
-            </Box>
-          )}
           {timelineOf(card, column, showsArchived ? subs : subs.filter(sub => !sub.isArchived))}
           {subs.length > 0 && (
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
@@ -1348,18 +1371,13 @@ export const register: Register = on => {
           <Button
             key="settings"
             label="Settings"
-            variant={settingsOpen ? 'primary' : 'secondary'}
-            onPress={() => update($, isSettingsOpen, isOn => !isOn)}
+            variant={settingsRow ? 'primary' : 'secondary'}
+            onPress={() => toggleSettings($)}
           />
         </Box>
-        {settingsOpen && (
+        {settingsRow && (
           <Box flexDirection="row" gap="sm" alignItems="center" justifyContent="flex-end" flexWrap="wrap">
-            {layoutControl}
-            {titleControl}
-            {cornerControl}
-            {activityControl}
-            {subsControl}
-            {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
+            {settingsRow}
           </Box>
         )}
         {isSerious && problem && (

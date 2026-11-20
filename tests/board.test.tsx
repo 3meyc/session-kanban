@@ -29,6 +29,26 @@ const SESSIONS = [
 const CURRENT = { sessionId: 'local_s', title: 'Board work', branch: 'claude/board', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:55:00Z', group: null, link: 'claude://x/local_s' }
 
 type On = Parameters<TestBody>[1]
+type Engine = Parameters<TestBody>[0]
+
+// The board's settings, in a pane of their own.
+const SETTINGS = { ...PANE, requestId: 'session-kanban-settings', props: { ...PANE.props, title: 'Board settings' } } as const
+
+// Picks a setting in the settings pane, as the person does, and closes it.
+async function pick($: Engine, key: string, value: string) {
+  const pane = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
+  await pane.select({ key, value })
+  await pane.unmount()
+}
+
+// What the settings pane shows for each key named.
+async function shownSettings($: Engine, keys: string[]) {
+  const pane = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
+  const values = await Promise.all(keys.map(async key => (await pane.find({ key }))?.props.value))
+  await pane.unmount()
+
+  return values
+}
 
 // What the engine stamps on a typed /kanban.
 const RUN_KANBAN = { command: 'kanban', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 140 } } as const
@@ -69,9 +89,7 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'settings' })
-  await ui.select({ key: 'layout', value: 'columns' })
-  await ui.press({ key: 'settings' })
+  await pick($, 'layout', 'columns')
   // Nothing runs, so In progress is a rail with no title; Archived is a rail with its count.
   expect(await ui.find({ type: 'Text', text: /^In progress/ })).toBeUndefined()
   expect(await ui.find({ key: 'expand-progress' })).toBeDefined()
@@ -120,12 +138,11 @@ test('status columns, rails, routines and sub-sessions', async ($, on) => {
   await ui.press({ key: 'collapse-archived' })
   expect(await ui.find({ key: 'local_d' })).toBeUndefined()
 
-  await ui.press({ key: 'settings' })
-  await ui.select({ key: 'title-mode', value: 'multiline' })
+  await pick($, 'title-mode', 'multiline')
   expect(await ui.find({ key: 'open-local_a' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Logging' })).toBeDefined()
-  await ui.select({ key: 'title-mode', value: 'ellipsis' })
-  await ui.select({ key: 'corners', value: 'rounded' })
+  await pick($, 'title-mode', 'ellipsis')
+  await pick($, 'corners', 'rounded')
   expect(await ui.find({ key: 'local_a' })).toBeDefined()
 
   await ui.press({ key: 'expand-progress' })
@@ -466,11 +483,8 @@ test('with "In sub-sessions: Open" a sub-session opens the board too', async ($,
   const sub = { ...CURRENT, startedBy: 'local_a' }
   const stored = store(on)
   const { clock, opens } = engine(on, JSON.stringify(SESSIONS), sub)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'settings' })
-  expect((await ui.find({ key: 'open-in-subs' }))?.props.value).toBe('closed')
-  await ui.select({ key: 'open-in-subs', value: 'open' })
-  await ui.unmount()
+  expect(await shownSettings($, ['open-in-subs'])).toEqual(['closed'])
+  await pick($, 'open-in-subs', 'open')
   // Kept in the store, so it reaches sessions started later.
   expect(stored.get('isOpenInSubs')).toBe(true)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -485,13 +499,9 @@ test('settings chosen in one session are where the next session starts', async (
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(1)
 
+  expect(await shownSettings($, ['layout', 'title-mode', 'corners'])).toEqual(['columns', 'multiline', 'rounded'])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'settings' })
-  expect((await ui.find({ key: 'layout' }))?.props.value).toBe('columns')
-  expect((await ui.find({ key: 'title-mode' }))?.props.value).toBe('multiline')
-  expect((await ui.find({ key: 'corners' }))?.props.value).toBe('rounded')
   expect((await ui.find({ key: 'count' }))?.props.value).toBe('25')
-  await ui.press({ key: 'settings' })
   expect(await ui.find({ key: 'local_a' })).toBeUndefined()
   // What changes now is saved for the session after.
   await ui.press({ key: 'expand-today' })
@@ -533,27 +543,29 @@ test('each card with recent transcript entries shows a week of activity, or of t
   // The busier span is full height; the hour outside the week is not drawn.
   let source = String(drawn[0]?.props.source)
   expect(source).toContain('<rect x="330" y="2" width="5" height="14"/>')
-  // A Today card's bars carry tooltips, so it is drawn interactive.
-  expect(drawn[0]?.props.isInteractive).toBe(true)
-  expect(source.match(/<title>/g)).toHaveLength(2)
-  expect(source).toContain('· 5 entries · 1k tokens (100 output)</title>')
+  // A picture, stretched to the card's width, with no tooltips.
+  expect(drawn[0]?.props.isInteractive).toBeUndefined()
+  expect(source).toContain('width="4000"')
+  expect(source).not.toContain('<title>')
   // The whole board's week, by day and hour, above the sections.
   expect(await ui.find({ key: 'heatmap' })).toBeDefined()
 
-  await ui.press({ key: 'settings' })
-  await ui.select({ key: 'activity', value: 'tokens' })
+  await pick($, 'activity', 'tokens')
   drawn = await timelines()
   source = String(drawn[0]?.props.source)
   expect(drawn[0]?.props.alt).toBe('Tokens over the last 7 days: busy in 2 of 56 three-hour spans')
   expect(source).toContain('<rect x="318" y="2" width="5" height="14"/>')
   const heat = (await ui.findAll({ type: 'Svg' })).find(found => String(found.props.alt).startsWith('Tokens of the sessions shown'))
-  expect(heat?.props.isInteractive).toBe(true)
   // The grid is wider than any pane, so it fills the board's width; its text sits outside it.
   expect(String(heat?.props.source)).toContain('width="4000"')
   expect(String(heat?.props.source)).not.toContain('<text')
   expect(await ui.find({ key: 'hour-18' })).toBeDefined()
+  // The working week runs Monday to Sunday; 2026-11-03 is a Tuesday, so it is the brighter day.
+  const days = (await ui.findAll({ type: 'Svg' })).find(found => found.props.alt === 'Days of the week')
+  expect(String(days?.props.source).match(/>(\w{3})<\/text>/g)?.join('')).toBe('>Mon</text>>Tue</text>>Wed</text>>Thu</text>>Fri</text>>Sat</text>>Sun</text>')
+  expect(String(days?.props.source)).toContain('fill="#d4d4d4">Tue<')
 
-  await ui.select({ key: 'activity', value: 'hidden' })
+  await pick($, 'activity', 'hidden')
   expect(await timelines()).toHaveLength(0)
   expect(await ui.find({ key: 'heatmap' })).toBeUndefined()
   // Hidden, the script still reads what sessions wait for, but no transcripts.
@@ -566,7 +578,7 @@ test('each card with recent transcript entries shows a week of activity, or of t
   await terminal.unmount()
 })
 
-test('a session waiting on you says so on its card and in the count', async ($, on) => {
+test('a session waiting on you has a dot by its title, and the toolbar counts them', async ($, on) => {
   activityScript(on, () => 'status local_b blocked pick one of \\"A\\" or B\nstatus local_c review_ready \nstatus local_a completed nothing\n')
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -574,9 +586,9 @@ test('a session waiting on you says so on its card and in the count', async ($, 
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ key: 'needs-local_b' })).toBeDefined()
-  expect((await ui.find({ type: 'Text', text: 'pick one of "A" or B' }))?.text).toBe('pick one of "A" or B')
   expect(await ui.find({ key: 'needs-local_c' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '● Ready for review' })).toBeDefined()
+  // Just the dot: neither words nor what the session waits for.
+  expect(await ui.find({ type: 'Text', text: /pick one of|Needs you|Ready for review/ })).toBeUndefined()
   // A completed turn waits for nothing.
   expect(await ui.find({ key: 'needs-local_a' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /· 1 needs you ·/ })).toBeDefined()
@@ -600,9 +612,41 @@ test("a parent card lines up its sub-sessions' lifespans under its timeline", as
   const source = String(chart?.props.source)
   expect(source.match(/height="3"/g)).toHaveLength(1)
   expect(source).toContain('y="19"')
-  expect(source).toContain('<title>Logging &lt;docs&gt; · ')
   expect(chart?.props.height).toBe(22)
   // A sub-session line says when it is the one waiting.
   expect(await ui.find({ key: 'needs-local_f' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Settings opens a pane of its own, and can go back to the board row', async ($, on) => {
+  const stored = store(on)
+  const closed: string[] = []
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
+  const { clock, opens: opened } = engine(on, JSON.stringify(SESSIONS))
+  await $.command.run(RUN_KANBAN)
+  await clock.advance(1)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings' })
+  expect(opened.at(-1)).toBe('session-kanban-settings')
+  // The board keeps no settings row while they have a pane.
+  expect(await ui.find({ key: 'layout' })).toBeUndefined()
+  const pane = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
+  expect((await pane.find({ key: 'settings-place' }))?.props.value).toBe('pane')
+  await pane.select({ key: 'settings-place', value: 'row' })
+  await pane.unmount()
+  expect(closed).toContain('session-kanban-settings')
+  expect(stored.get('settingsPlace')).toBe('row')
+  // Back in the row, which the Settings button folds away and open again.
+  expect(await ui.find({ key: 'layout' })).toBeDefined()
+  await ui.press({ key: 'settings' })
+  expect(await ui.find({ key: 'layout' })).toBeUndefined()
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'settings-place', value: 'pane' })
+  expect(opened.at(-1)).toBe('session-kanban-settings')
+  expect(await ui.find({ key: 'layout' })).toBeUndefined()
   await ui.unmount()
 })

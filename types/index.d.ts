@@ -28,6 +28,10 @@ export type Activity = Record<string, Record<string, HourCounts>>
 // What the card timelines and the heatmap measure, or neither drawn.
 export type ActivityMetric = 'entries' | 'tokens' | 'hidden'
 
+// Where the Settings button shows the board's settings: a pane of their own,
+// or a row folded open under the toolbar.
+export type SettingsPlace = 'pane' | 'row'
+
 // The app's summary of a session's last turn, kept only when the session waits
 // on the person: blocked on an answer, or done and ready for review.
 export type TurnStatus = { category: 'blocked' | 'review_ready'; needsAction: string }
@@ -57,6 +61,7 @@ declare module 'claude-code' {
       archivedShownIn: Record<string, boolean>
       openSections: Record<string, boolean>
       isSettingsOpen: boolean
+      settingsPlace: SettingsPlace
       titleMode: TitleMode
       cornerStyle: CornerStyle
       isOpenInSubs: boolean
