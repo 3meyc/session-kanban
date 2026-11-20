@@ -526,7 +526,10 @@ function activityScript(on: On, stdout: () => string) {
 test('each card with recent transcript entries shows a week of activity, or of tokens', async ($, on) => {
   const asked = activityScript(
     on,
-    () => 'hours local_a 2026-11-03T10=5,1000,100 2026-11-03T04=2,9000,900 2026-10-20T10=9,1,1\nhours local_c 2026-10-20T10=9,1,1\nhours not-a-session 1=1\n',
+    () =>
+      'hours local_a 2026-11-03T10=5,1000,100 2026-11-03T04=2,9000,900 2026-10-20T10=9,1,1\nhours local_c 2026-10-20T10=9,1,1\n' +
+      // Last Wednesday counts on the heatmap; the Tuesday a week ago is past its 7 days.
+      'hours local_d 2026-10-28T10=3,10,1 2026-10-27T13=50,1,1\nhours not-a-session 1=1\n',
   )
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -560,10 +563,18 @@ test('each card with recent transcript entries shows a week of activity, or of t
   expect(String(heat?.props.source)).toContain('width="4000"')
   expect(String(heat?.props.source)).not.toContain('<text')
   expect(await ui.find({ key: 'hour-18' })).toBeDefined()
-  // The working week runs Monday to Sunday; 2026-11-03 is a Tuesday, so it is the brighter day.
-  const days = (await ui.findAll({ type: 'Svg' })).find(found => found.props.alt === 'Days of the week')
-  expect(String(days?.props.source).match(/>(\w{3})<\/text>/g)?.join('')).toBe('>Mon</text>>Tue</text>>Wed</text>>Thu</text>>Fri</text>>Sat</text>>Sun</text>')
-  expect(String(days?.props.source)).toContain('fill="#d4d4d4">Tue<')
+  expect(heat?.props.alt).toBe('Tokens of the sessions shown, by day and hour: busy in 3 of 168 hours in the last 7 days')
+  // The last 7 days in the week's order, Monday first; 2026-11-03 is a Tuesday, so it is the brighter day.
+  const dayNames = async () => {
+    const days = (await ui.findAll({ type: 'Svg' })).find(found => found.props.alt === 'Days of the week')
+    return String(days?.props.source)
+  }
+  expect((await dayNames()).match(/>\w{3}</g)?.join('')).toBe('>Mon<>Tue<>Wed<>Thu<>Fri<>Sat<>Sun<')
+  expect(await dayNames()).toContain('fill="#d4d4d4">Tue<')
+  // Another first day of the week reorders the rows, and is kept for new sessions.
+  expect(await shownSettings($, ['week-start'])).toEqual(['1'])
+  await pick($, 'week-start', '0')
+  expect((await dayNames()).match(/>\w{3}</g)?.join('')).toBe('>Sun<>Mon<>Tue<>Wed<>Thu<>Fri<>Sat<')
 
   await pick($, 'activity', 'hidden')
   expect(await timelines()).toHaveLength(0)

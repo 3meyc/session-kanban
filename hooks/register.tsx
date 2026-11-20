@@ -51,6 +51,8 @@ const archivedShownIn = atom({ plugin: 'session-kanban', key: 'archivedShownIn' 
 const openSections = atom({ plugin: 'session-kanban', key: 'openSections' } as const, {} as Record<string, boolean>)
 const isSettingsOpen = atom({ plugin: 'session-kanban', key: 'isSettingsOpen' } as const, false)
 const settingsPlace = atom({ plugin: 'session-kanban', key: 'settingsPlace' } as const, 'pane' as SettingsPlace)
+// The first day of the week, as Date.getDay(): Monday unless picked otherwise.
+const weekStart = atom({ plugin: 'session-kanban', key: 'weekStart' } as const, 1)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
@@ -89,6 +91,7 @@ async function restoreSettings($: EngineInterface) {
   await saved($, layoutMode).then(value => update($, layoutMode, current => value ?? current))
   await saved($, activityMetric).then(value => update($, activityMetric, current => value ?? current))
   await saved($, settingsPlace).then(value => update($, settingsPlace, current => value ?? current))
+  await saved($, weekStart).then(value => update($, weekStart, current => value ?? current))
 }
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
@@ -304,8 +307,10 @@ function unescapeJson(text: string): string {
   }
 }
 
-// The heatmap's rows: the working week, Monday first.
-const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+// Indexed as Date.getDay(), Sunday first; the heatmap starts its rows at the
+// chosen first day of the week.
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 function measureOf(counts: HourCounts, metric: ActivityMetric): number {
   return metric === 'tokens' ? counts[1] : counts[0]
@@ -395,26 +400,28 @@ const HEATMAP_COLOR = '#3b82f6'
 const HEATMAP_TEXT = '#8b8b8b'
 const HEATMAP_TODAY_TEXT = '#d4d4d4'
 
-// The whole board's working week as a grid: a row per local day from Monday to
-// Sunday, and a column per local hour, shaded by the sum over the sessions
-// shown; days still to come are left blank and today's name is brighter. The
-// grid stretches to the board's width, so its text would stretch too: the day
-// names are a drawing of their own, the hours are Text.
+// The last 7 days of the whole board as a grid: a row per weekday in the
+// week's order from `weekStart` (0 Sunday … 6 Saturday), each the most recent
+// such day, today included, and a column per local hour, shaded by the sum
+// over the sessions shown; today's name is brighter. The grid stretches to the
+// board's width, so its text would stretch too: the day names are a drawing of
+// their own, the hours are Text.
 function heatmapSvg(
   perHour: Map<number, HourCounts>,
   metric: ActivityMetric,
   now: number,
+  weekStart: number,
 ): { grid: string; days: string; alt: string; height: number } | null {
   const today = new Date(now)
   today.setHours(0, 0, 0, 0)
-  const todayRow = (today.getDay() + 6) % 7
-  const firstDay = new Date(today)
-  firstDay.setDate(firstDay.getDate() - todayRow)
+  const rowOf = (weekday: number) => (weekday - weekStart + 7) % 7
+  const todayRow = rowOf(today.getDay())
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, (): HourCounts => [0, 0, 0]))
   for (const [at, counts] of perHour) {
     const day = new Date(at)
     day.setHours(0, 0, 0, 0)
-    const line = cells[Math.round((day.getTime() - firstDay.getTime()) / DAY_MS)]
+    const daysAgo = Math.round((today.getTime() - day.getTime()) / DAY_MS)
+    const line = daysAgo >= 0 && daysAgo < 7 ? cells[rowOf(day.getDay())] : undefined
     const hour = new Date(at).getHours()
     const cell = line?.[hour]
     if (line && cell) line[hour] = [cell[0] + counts[0], cell[1] + counts[1], cell[2] + counts[2]]
@@ -429,11 +436,11 @@ function heatmapSvg(
   cells.forEach((row, rowIndex) => {
     const y = rowIndex * HEATMAP_PITCH
     const nameColor = rowIndex === todayRow ? HEATMAP_TODAY_TEXT : HEATMAP_TEXT
-    dayParts.push(`<text x="0" y="${y + 9}" fill="${nameColor}">${WEEK_DAYS[rowIndex]}</text>`)
+    dayParts.push(`<text x="0" y="${y + 9}" fill="${nameColor}">${WEEKDAYS[(weekStart + rowIndex) % 7]}</text>`)
     row.forEach((cell, hour) => {
       const value = measureOf(cell, metric)
       if (value > 0) busyHours++
-      const opacity = value > 0 ? 0.2 + 0.8 * Math.sqrt(value / peak) : rowIndex > todayRow ? 0.03 : 0.07
+      const opacity = value > 0 ? 0.2 + 0.8 * Math.sqrt(value / peak) : 0.07
       cellParts.push(
         `<rect x="${hour * HEATMAP_PITCH}" y="${y}" width="${HEATMAP_CELL}" height="${HEATMAP_CELL}" fill-opacity="${opacity.toFixed(2)}"/>`,
       )
@@ -447,7 +454,7 @@ function heatmapSvg(
     `<g font-family="-apple-system, system-ui, sans-serif" font-size="9">${dayParts.join('')}</g></svg>`
   const measured = metric === 'tokens' ? 'Tokens' : 'Activity'
 
-  return { grid, days, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours this week`, height }
+  return { grid, days, alt: `${measured} of the sessions shown, by day and hour: busy in ${busyHours} of ${7 * 24} hours in the last 7 days`, height }
 }
 
 // How far the archived list may widen: up to this many times the chosen count.
@@ -667,6 +674,7 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
   const opensInSubs = await read($, isOpenInSubs)
   const metric = await read($, activityMetric)
   const place = await read($, settingsPlace)
+  const firstWeekday = await read($, weekStart)
   if (e.surface !== 'desktop' && e.surface !== 'vscode') {
     return [
       <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>,
@@ -674,6 +682,7 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       <Text dimColor>Corners: {isSquare ? 'square' : 'rounded'}</Text>,
       <Text dimColor>Timelines: {metric === 'entries' ? 'activity' : metric}</Text>,
       <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>,
+      <Text dimColor>Week starts on: {WEEKDAY_NAMES[firstWeekday]}</Text>,
       <Text dimColor>Settings: {place === 'pane' ? 'own pane' : 'board row'}</Text>,
       <Text dimColor>(change them on the desktop app)</Text>,
     ]
@@ -735,6 +744,16 @@ async function settingsControls($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       ]}
       value={opensInSubs ? 'open' : 'closed'}
       onSelect={value => update($, isOpenInSubs, () => value === 'open').then(save($, isOpenInSubs))}
+    />,
+    <Select
+      key="week-start"
+      label="Week starts on"
+      options={[1, 2, 3, 4, 5, 6, 0].map(day => ({ value: String(day), label: WEEKDAY_NAMES[day] ?? '' }))}
+      value={String(firstWeekday)}
+      onSelect={value => {
+        const day = Number(value)
+        if (Number.isInteger(day) && day >= 0 && day <= 6) void update($, weekStart, () => day).then(save($, weekStart))
+      }}
     />,
     // The way back: settings in the board's row, as before they had a pane.
     <Select
@@ -904,6 +923,7 @@ export const register: Register = on => {
     let filterControl = <Text dimColor>Section: {options.find(option => option.value === selected)?.label}</Text>
     const metric = await read($, activityMetric)
     const activityOf = metric === 'hidden' ? {} : await read($, activity)
+    const firstWeekday = await read($, weekStart)
     const waitingOf = await read($, statuses)
     const settingsRow = settingsOpen && (await read($, settingsPlace)) === 'row' ? await settingsControls($, e) : null
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
@@ -1022,7 +1042,7 @@ export const register: Register = on => {
           perHour.set(at, [sum[0] + counts[0], sum[1] + counts[1], sum[2] + counts[2]])
         }
       }
-      const drawing = heatmapSvg(perHour, metric, now)
+      const drawing = heatmapSvg(perHour, metric, now, firstWeekday)
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 

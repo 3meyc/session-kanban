@@ -62,6 +62,8 @@ declare module 'claude-code' {
       openSections: Record<string, boolean>
       isSettingsOpen: boolean
       settingsPlace: SettingsPlace
+      // The first day of the week, as Date.getDay() numbers it (0 Sunday … 6 Saturday).
+      weekStart: number
       titleMode: TitleMode
       cornerStyle: CornerStyle
       isOpenInSubs: boolean
