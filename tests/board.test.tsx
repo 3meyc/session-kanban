@@ -500,3 +500,36 @@ test('settings chosen in one session are where the next session starts', async (
   expect(stored.get('filter')).toBe('g1')
   await ui.unmount()
 })
+
+test('each card with recent transcript entries shows a week of activity', async ($, on) => {
+  const asked: string[] = []
+  on('process.run', (_, e) => {
+    const isActivity = String(e.argv[1]).endsWith('/hooks/activity.sh')
+    if (isActivity) asked.push(`${e.argv[2]} ${String(e.init?.stdin).trim().split('\n').join(',')}`)
+    const stdout = isActivity ? 'local_a 2026-11-03T10=5 2026-11-03T04=2 2026-10-20T10=9\nlocal_c 2026-10-20T10=9\nnot-a-session 1=1\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1)
+
+  // Only sessions active in the window are asked about, from its first hour on.
+  expect(asked[0]).toBe('2026-10-27T12 local_a,local_b,local_d,local_e,local_r,local_s')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const timelines = async () => (await ui.findAll({ type: 'Svg' })).filter(found => String(found.props.alt).startsWith('Activity'))
+  const drawn = await timelines()
+  expect(drawn).toHaveLength(1)
+  expect(await ui.find({ key: 'activity-local_a' })).toBeDefined()
+  expect(drawn[0]?.props.alt).toBe('Activity over the last 7 days: busy in 2 of 56 three-hour spans')
+  // Two bars, the busier one full height; the hour outside the week is not drawn.
+  expect(String(drawn[0]?.props.source).match(/<rect x=/g)).toHaveLength(2)
+  expect(String(drawn[0]?.props.source)).toContain('<rect x="330" y="2" width="5" height="14"/>')
+  await ui.press({ key: 'settings' })
+  await ui.select({ key: 'activity', value: 'hidden' })
+  expect(await timelines()).toHaveLength(0)
+  await ui.unmount()
+
+  const terminal = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
+  await terminal.unmount()
+})

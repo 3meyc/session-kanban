@@ -17,6 +17,10 @@ export type Card = {
 // What only get_session tells about a session; fixed for its life, so looked up once.
 export type Detail = { isRoutine: boolean; createdAt: number }
 
+// Transcript entries per UTC hour ("YYYY-MM-DDTHH"), by session id; only hours
+// in the timeline's window, and only sessions that wrote in it.
+export type Activity = Record<string, Record<string, number>>
+
 export type TitleMode = 'ellipsis' | 'multiline'
 
 export type CornerStyle = 'square' | 'rounded'
@@ -32,6 +36,8 @@ declare module 'claude-code' {
     'session-kanban': {
       cards: Shaped<Card[]>
       details: Shaped<Record<string, Detail>>
+      activity: Shaped<Activity>
+      isActivityShown: boolean
       filter: string
       isThisWeek: boolean
       isRoutinesShown: boolean

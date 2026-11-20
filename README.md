@@ -6,11 +6,12 @@ A Claude Code mod that shows your desktop-app sessions as a Kanban board in a pa
 - **Background work counts as running:** a session whose background shells or agents are still at work stays in In progress with a green dot, though the app shows it as idle once its turn ends.
 - **Collapsible sections:** every section collapses to a thin rail (or a bar in the stacked layout) with its count. In progress starts collapsed when nothing is running, Archived starts collapsed, and Today and Earlier start open.
 - **Cards:** a `#` button that copies the session id, the title with an open arrow (`→`), the sidebar section as a tag, time since last activity and branch underneath (selectable, so the branch can be copied), and a footer with Pin/Unpin and Archive, or Delete and Unarchive on archived cards, plus `Show {n} archived` / `Hide archived` when the card has archived sub-sessions.
+- **Activity timeline:** under the time and branch, a strip of the last 7 days in bars of three hours, each as tall as how much the session wrote to its transcript then, with a tick at each midnight. Cards with nothing written that week have none.
 - **Pinned sessions** sort to the top of their column and carry a thin coloured bar on the left.
 - **The session you are in** (the one the board runs in) is filled in a stronger shade of its column, as a card or as a sub-session line.
 - **Sub-sessions** (sessions Claude started from another, or forks) are listed inside their parent's card as a task list; archived ones show only after that card's `Show {n} archived` (each card remembers its own choice), and Archived counts them beside its own cards (`Archived 3 · 20 sub-sessions`), and the sub-sessions of a hidden one move up a level, so a running one is never hidden.
 - **Toolbar:** a search box (title, branch or section), filter by sidebar section, how many sessions to load (25, 50, 100, All; archived sessions are looked further back, up to eight times that, when archived sub-sessions crowd them out), This week, Show routines (routine runs are tagged with their run date), Refresh.
-- **Settings:** layout (stacked in one column with In progress on top, the default, or status columns side by side); titles on one line or multiline; square or rounded cards; whether the board opens by itself in sub-sessions (off by default).
+- **Settings:** layout (stacked in one column with In progress on top, the default, or status columns side by side); titles on one line or multiline; square or rounded cards; the activity timeline shown or hidden; whether the board opens by itself in sub-sessions (off by default).
 - **Choices carry over:** settings, the toolbar's section filter, Load, This week and Show routines, which sections are open, and each card's `Show {n} archived` are saved, so a new session's board starts as you left the last one. The search text is not kept.
 - **Finished toasts:** when a session stops running, the board shows a toast naming it.
 
@@ -57,6 +58,7 @@ The app's toolbar takes no buttons from mods, so the command is the toggle.
 - **No split view from the board:** the app shows a session beside another only if that session started it, so the board only switches to a session. To split, right-click a session in the sidebar and choose Open in → Split view.
 - **Finished toasts have no Open button:** toasts carry text only.
 - **Background work is read from local files:** the board looks at each live session's own records under `~/.claude` (with `/bin/sh`, `grep` and `awk`), so it sees background shells and agents of sessions on this Mac only, not of remote or cloud sessions.
+- **The activity timeline reads the app's private files:** the app's own record of each session (under `~/Library/Application Support/Claude`) names its transcript under `~/.claude/projects`. Neither is a published interface, so an app update can leave the timeline empty; sessions on other machines or in the cloud have none, and the terminal shows none (it draws no SVG). Its bars carry no tooltips.
 - **Routines** are recognised by looking each session up once; on a first load an older routine run can show for a minute until its lookup returns.
 - **Icons are Unicode characters:** buttons take only text, so icon sets such as Lucide cannot be used on them.
 

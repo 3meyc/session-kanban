@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Atom, EngineInterface, Register, RenderElement } from 'claude-code'
 
-import type { Card, CornerStyle, Detail, Failure, LayoutMode, TitleMode } from '../types'
+import type { Activity, Card, CornerStyle, Detail, Failure, LayoutMode, TitleMode } from '../types'
 
 const PANE = 'session-kanban'
 const TITLE = 'Sessions board'
@@ -26,6 +26,8 @@ const BUTTON_INSET = 'xs'
 // stored, which outlives a reload.
 const cards = atom({ plugin: 'session-kanban', key: 'cards' } as const, [], { shape: 'cards-4' })
 const details = atom({ plugin: 'session-kanban', key: 'details' } as const, {}, { shape: 'details-1' })
+const activity = atom({ plugin: 'session-kanban', key: 'activity' } as const, {}, { shape: 'activity-1' })
+const isActivityShown = atom({ plugin: 'session-kanban', key: 'isActivityShown' } as const, true)
 const filter = atom({ plugin: 'session-kanban', key: 'filter' } as const, 'all')
 const isThisWeek = atom({ plugin: 'session-kanban', key: 'isThisWeek' } as const, false)
 const isRoutinesShown = atom({ plugin: 'session-kanban', key: 'isRoutinesShown' } as const, false)
@@ -71,6 +73,7 @@ async function restoreSettings($: EngineInterface) {
   await saved($, cornerStyle).then(value => update($, cornerStyle, current => value ?? current))
   await saved($, isOpenInSubs).then(value => update($, isOpenInSubs, current => value ?? current))
   await saved($, layoutMode).then(value => update($, layoutMode, current => value ?? current))
+  await saved($, isActivityShown).then(value => update($, isActivityShown, current => value ?? current))
 }
 
 // `tint` is an 8-digit hex at ~10% alpha so one value reads as a pale wash on
@@ -225,6 +228,75 @@ async function backgroundBusy($: EngineInterface): Promise<string[]> {
     .filter(id => id.startsWith('local_'))
 }
 
+// The timeline on each card: the last week, in bars of three hours.
+const ACTIVITY_BIN_MS = 3 * 60 * 60 * 1000
+const ACTIVITY_BINS = WEEK_MS / ACTIVITY_BIN_MS
+const ACTIVITY_BAR_WIDTH = 6
+const ACTIVITY_HEIGHT = 16
+
+// The session list says only when a session was last active; its transcript
+// says when it worked. The script reads the transcripts on this Mac and prints
+// "<session id> <hour>=<count> …" for the hours since the window's start.
+async function learnActivity($: EngineInterface, list: Card[], now: number) {
+  const since = now - WEEK_MS
+  const ids = list.filter(card => card.isRunning || card.lastActivityAt >= since).map(card => card.id)
+  const ran =
+    ids.length === 0
+      ? null
+      : await $.process
+          .run(['/bin/sh', `${$.plugin.root}/hooks/activity.sh`, new Date(since).toISOString().slice(0, 13)], {
+            stdin: `${ids.join('\n')}\n`,
+          })
+          .catch(() => null)
+  if (ids.length > 0 && (!ran || ran.exitCode !== 0)) return
+  const learned: Activity = {}
+  for (const line of ran?.stdout.split('\n') ?? []) {
+    const [id, ...pairs] = line.trim().split(' ')
+    if (!id?.startsWith('local_')) continue
+    const hours: Record<string, number> = {}
+    for (const pair of pairs) {
+      const [hour, count] = pair.split('=')
+      if (hour && /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(hour) && Number(count) > 0) hours[hour] = Number(count)
+    }
+    if (Object.keys(hours).length > 0) learned[id] = hours
+  }
+  await update($, activity, () => learned)
+}
+
+// One bar per three hours, as tall as its share of the card's busiest bar, on a
+// faint baseline, with a tick at each local midnight; null when nothing was written.
+function activitySvg(hours: Record<string, number>, now: number, color: string): { source: string; alt: string } | null {
+  const start = now - WEEK_MS
+  const bins = new Array<number>(ACTIVITY_BINS).fill(0)
+  for (const [hour, count] of Object.entries(hours)) {
+    const index = Math.floor((Date.parse(`${hour}:00:00Z`) - start) / ACTIVITY_BIN_MS)
+    if (index >= 0 && index < ACTIVITY_BINS) bins[index] = (bins[index] ?? 0) + count
+  }
+  const peak = Math.max(...bins)
+  if (peak === 0) return null
+  const width = ACTIVITY_BINS * ACTIVITY_BAR_WIDTH
+  const toX = (at: number) => ((at - start) / ACTIVITY_BIN_MS) * ACTIVITY_BAR_WIDTH
+  const bars = bins.flatMap((count, index) => {
+    if (count === 0) return []
+    const height = Math.max(2, Math.round((count / peak) * (ACTIVITY_HEIGHT - 2)))
+    return [`<rect x="${index * ACTIVITY_BAR_WIDTH}" y="${ACTIVITY_HEIGHT - height}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${height}"/>`]
+  })
+  const ticks: string[] = []
+  const midnight = new Date(start)
+  midnight.setHours(24, 0, 0, 0)
+  for (let at = midnight.getTime(); at < now; at = new Date(at).setDate(new Date(at).getDate() + 1)) {
+    const x = toX(at).toFixed(1)
+    ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${ACTIVITY_HEIGHT}"/>`)
+  }
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ACTIVITY_HEIGHT}" viewBox="0 0 ${width} ${ACTIVITY_HEIGHT}" preserveAspectRatio="none">` +
+    `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` +
+    `<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
+    `<g fill="${color}">${bars.join('')}</g></svg>`
+
+  return { source, alt: `Activity over the last 7 days: busy in ${bars.length} of ${ACTIVITY_BINS} three-hour spans` }
+}
+
 // How far the archived list may widen: up to this many times the chosen count.
 const ARCHIVED_REACH = 8
 
@@ -334,6 +406,7 @@ async function refresh($: EngineInterface) {
     // Only a successful load moves this, so a failure can say how old the cards are.
     await update($, fetchedAt, () => at)
     await learnDetails($, outcome.list)
+    if (await read($, isActivityShown)) await learnActivity($, outcome.list, at)
     return
   }
   const kind: Failure['kind'] = OFFLINE_PATTERN.test(outcome.problem) ? 'offline' : 'error'
@@ -542,6 +615,9 @@ export const register: Register = on => {
     let layoutControl = <Text dimColor>Layout: {isStacked ? 'stacked' : 'columns'}</Text>
     const opensInSubs = await read($, isOpenInSubs)
     let subsControl = <Text dimColor>In sub-sessions: {opensInSubs ? 'opens' : 'closed'}</Text>
+    const activityShown = await read($, isActivityShown)
+    const activityOf = activityShown ? await read($, activity) : {}
+    let activityControl = <Text dimColor>Activity: {activityShown ? 'shown' : 'hidden'}</Text>
     const countChoice = COUNT_OPTIONS.includes(await read($, loadCount)) ? await read($, loadCount) : String(DEFAULT_COUNT)
     const countLabel = (value: string) => (value === 'all' ? 'All' : value)
     let countControl = <Text dimColor>Load: {countLabel(countChoice)}</Text>
@@ -589,6 +665,21 @@ export const register: Register = on => {
           ]}
           value={isMultiline ? 'multiline' : 'ellipsis'}
           onSelect={value => update($, titleMode, () => (value === 'multiline' ? 'multiline' : 'ellipsis')).then(save($, titleMode))}
+        />
+      )
+      activityControl = (
+        <Select
+          key="activity"
+          label="Activity"
+          options={[
+            { value: 'shown', label: 'Last 7 days' },
+            { value: 'hidden', label: 'Hidden' },
+          ]}
+          value={activityShown ? 'shown' : 'hidden'}
+          onSelect={value => {
+            void update($, isActivityShown, () => value === 'shown').then(save($, isActivityShown))
+            if (value === 'shown') later($, () => refresh($))
+          }}
         />
       )
       subsControl = (
@@ -658,6 +749,21 @@ export const register: Register = on => {
             height={2000}
             source={`<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2000" viewBox="0 0 3 2000" preserveAspectRatio="none"><rect width="3" height="2000" fill="${color}"/></svg>`}
           />
+        </Box>
+      )
+    }
+
+    // The terminal has no Svg; its board goes without the timeline.
+    const timelineOf = (card: Card, column: Column) => {
+      const hours = activityOf[card.id]
+      if (!hours || e.surface === 'terminal') return null
+      const drawing = activitySvg(hours, now, column.tint.slice(0, 7))
+      if (!drawing) return null
+      const { Svg } = $.ui.resolve(e)
+
+      return (
+        <Box key={`activity-${card.id}`} paddingLeft={inset} marginTop="xs">
+          <Svg alt={drawing.alt} height={ACTIVITY_HEIGHT} source={drawing.source} />
         </Box>
       )
     }
@@ -836,6 +942,7 @@ export const register: Register = on => {
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>
+          {timelineOf(card, column)}
           {subs.length > 0 && (
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
               <Text dimColor size="caption">
@@ -988,6 +1095,7 @@ export const register: Register = on => {
             {layoutControl}
             {titleControl}
             {cornerControl}
+            {activityControl}
             {subsControl}
             {!canPick && <Text dimColor>(change it on the desktop app)</Text>}
           </Box>
