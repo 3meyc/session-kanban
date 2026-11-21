@@ -70,6 +70,8 @@ declare module 'claude-code' {
       // Commands typed in Settings and not yet applied; null when none are.
       commandDraft: string[] | null
       commandFieldCount: number
+      // Slash commands a button started that have not settled, by their text.
+      runningKeys: Record<string, boolean>
       isCommandBarShown: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle

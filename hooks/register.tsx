@@ -56,6 +56,8 @@ const weekStart = atom({ plugin: 'session-kanban', key: 'weekStart' } as const, 
 const commandKeys = atom({ plugin: 'session-kanban', key: 'commandKeys' } as const, [] as string[])
 const isCommandBarShown = atom({ plugin: 'session-kanban', key: 'isCommandBarShown' } as const, false)
 const commandDraft = atom({ plugin: 'session-kanban', key: 'commandDraft' } as const, null as string[] | null)
+// The slash commands a button started that have not settled yet, by their text.
+const runningKeys = atom({ plugin: 'session-kanban', key: 'runningKeys' } as const, {} as Record<string, boolean>)
 // How many command fields Settings shows, at least past the last filled one.
 const commandFieldCount = atom({ plugin: 'session-kanban', key: 'commandFieldCount' } as const, 3)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
@@ -647,6 +649,7 @@ function later($: EngineInterface, work: () => Promise<unknown>) {
 const SETTINGS_PANE = 'session-kanban-settings'
 const SETTINGS_TITLE = 'Board settings'
 const COMMAND_KEY_COUNT = 12
+const RUNNING_KEY_MAX_MS = 5 * 60_000
 
 // What a command button shows of its command: a slash command's name past its
 // plugin prefix (`/session:close-out` → close-out), else the prompt's start.
@@ -686,12 +689,28 @@ async function runCommandKey($: EngineInterface, text: string) {
     if (slash?.[1] === 'kanban') {
       await toggleBoard($)
     } else if (slash?.[1]) {
-      await $.command.run({ command: slash[1], args: slash[2] ?? '' })
+      await runSlashCommand($, text, slash[1], slash[2] ?? '')
     } else if (!(await $.prompt.fill({ text })).isFilled) {
       $.ui.toast('Close the open dialog first: the prompt box cannot take the text now.')
     }
   } catch (error) {
     $.ui.toast(`Could not run ${text}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+// A command waits for the session to be idle and then takes a while to show
+// in the transcript, so its button reads as started until the run settles,
+// and a second press meanwhile is ignored rather than queued again.
+async function runSlashCommand($: EngineInterface, text: string, command: string, args: string) {
+  if ((await read($, runningKeys))[text]) return
+  await update($, runningKeys, running => ({ ...running, [text]: true }))
+  // A run the engine never settles must not leave the button stuck.
+  const stuck = $.clock.after(RUNNING_KEY_MAX_MS, () => void update($, runningKeys, running => ({ ...running, [text]: false })))
+  try {
+    await $.command.run({ command, args })
+  } finally {
+    stuck.cancel()
+    await update($, runningKeys, running => ({ ...running, [text]: false }))
   }
 }
 
@@ -998,6 +1017,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey || !(await read($, isCommandBarShown))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const keys = (await read($, commandKeys)).slice(0, COMMAND_KEY_COUNT)
+    const running = await read($, runningKeys)
     const isCommand = (text: string) => text.trim().startsWith('/')
     const buttonsWhere = (wanted: boolean) => keys.flatMap((text, index) =>
       text.trim() === '' || isCommand(text) !== wanted
@@ -1010,17 +1030,20 @@ export const register: Register = on => {
               // No padding: the desktop pads a bordered Box by default, which
               // doubled the button's size. Hidden overflow clips the native
               // button's own backdrop, which showed as a second outline.
+              // A started command turns its frame orange and its label trails "…"
+              // until the run settles.
               <Box
                 key={`command-frame-${index + 1}`}
                 borderStyle="round"
-                borderColor="suggestion"
-                backgroundColor="#3b82f633"
+                borderColor={running[text.trim()] ? 'warning' : 'suggestion'}
+                backgroundColor={running[text.trim()] ? '#f59e0b33' : '#3b82f633'}
                 padding={0}
                 overflow="hidden"
               >
                 <Button
                   key={`command-key-${index + 1}`}
-                  label={commandKeyName(text.trim())}
+                  label={running[text.trim()] ? `${commandKeyName(text.trim())} …` : commandKeyName(text.trim())}
+                  dimColor={running[text.trim()] === true}
                   onPress={() => later($, () => runCommandKey($, text.trim()))}
                 />
               </Box>

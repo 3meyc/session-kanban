@@ -679,6 +679,34 @@ test('Settings opens a pane of its own, and can go back to the board row', async
   await ui.unmount()
 })
 
+test('a started command shows on its button until it settles, and a second press is ignored', async ($, on) => {
+  store(on, { isCommandBarShown: true, commandKeys: ['/session:close-out'] })
+  const ran: string[] = []
+  let settle = () => {}
+  on('command.run', async (_, e) => {
+    ran.push(e.command)
+    await new Promise<void>(resolve => (settle = resolve))
+    return {}
+  })
+  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await band.press({ key: 'command-key-1' })
+  await clock.advance(1)
+  expect((await band.find({ key: 'command-key-1' }))?.text).toBe('close-out …')
+  expect((await band.find({ key: 'command-frame-1' }))?.props.borderColor).toBe('warning')
+  await band.press({ key: 'command-key-1' })
+  await clock.advance(1)
+  expect(ran).toEqual(['session:close-out'])
+
+  settle()
+  await clock.advance(1)
+  expect((await band.find({ key: 'command-key-1' }))?.text).toBe('close-out')
+  expect((await band.find({ key: 'command-frame-1' }))?.props.borderColor).toBe('suggestion')
+  await band.unmount()
+})
+
 const BAND = {
   plugin: 'session-kanban',
   component: 'AbovePrompt',
