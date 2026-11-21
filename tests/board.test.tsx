@@ -669,17 +669,17 @@ const BAND = {
   props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
 
-test('command buttons above the prompt run what Settings gives them, as typed', async ($, on) => {
+test('command buttons run their slash command, or put their prompt in the box to send', async ($, on) => {
   const stored = store(on)
   const ran: string[] = []
-  const prompts: string[] = []
+  const filled: string[] = []
   on('command.run', (_, e) => {
     ran.push(`${e.command}|${e.args}`)
     return {}
   })
-  on('prompt.submit', (_, e) => {
-    prompts.push(e.text)
-    return { text: e.text }
+  on('prompt.fill', (_, e) => {
+    filled.push(e.text)
+    return { isFilled: true }
   })
   const { clock } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -697,9 +697,13 @@ test('command buttons above the prompt run what Settings gives them, as typed', 
   expect((await pane.find({ type: 'Text', text: 'Command buttons' }))?.text).toBe('Command buttons')
   // Three between the four sections, one over Apply.
   expect((await pane.findAll({ type: 'Svg' })).map(svg => svg.props.alt)).toEqual(Array(4).fill('Section separator'))
-  expect(await pane.find({ key: 'command-key-12' })).toBeDefined()
+  // Three fields to start with, and one more for each Add command.
+  expect(await pane.find({ key: 'command-key-3' })).toBeDefined()
+  expect(await pane.find({ key: 'command-key-4' })).toBeUndefined()
+  await pane.press({ key: 'command-add' })
+  expect(await pane.find({ key: 'command-key-4' })).toBeDefined()
   await pane.input({ key: 'command-key-1', text: '/session:close-out', kind: 'change' })
-  await pane.input({ key: 'command-key-3', text: 'Summarize the diff', kind: 'change' })
+  await pane.input({ key: 'command-key-4', text: 'Summarize the diff', kind: 'change' })
   // Typing alone puts nothing on the band.
   expect(await band.find({ key: 'command-key-1' })).toBeUndefined()
   expect(stored.get('commandKeys')).toBeUndefined()
@@ -707,17 +711,23 @@ test('command buttons above the prompt run what Settings gives them, as typed', 
   // Apply leaves the pane open.
   expect(await pane.find({ key: 'command-key-1' })).toBeDefined()
   await pane.unmount()
-  expect(stored.get('commandKeys')).toEqual(['/session:close-out', '', 'Summarize the diff', '', '', '', '', '', '', '', '', ''])
+  expect(stored.get('commandKeys')).toEqual(['/session:close-out', '', '', 'Summarize the diff', '', '', '', '', '', '', '', ''])
 
   // Empty slots are left out; a button shows its command's name only.
   expect((await band.find({ key: 'command-key-1' }))?.text).toBe('close-out')
   expect(await band.find({ key: 'command-key-2' })).toBeUndefined()
-  expect((await band.find({ key: 'command-key-3' }))?.text).toBe('Summarize the diff')
+  expect((await band.find({ key: 'command-key-4' }))?.text).toBe('Summarize the diff')
   await band.press({ key: 'command-key-1' })
-  await band.press({ key: 'command-key-3' })
+  await band.press({ key: 'command-key-4' })
   await clock.advance(1)
   expect(ran).toContain('session:close-out|')
-  expect(prompts).toEqual(['Summarize the diff'])
+  // A prompt is left in the box for the person to send as their own.
+  expect(filled).toEqual(['Summarize the diff'])
+
+  // A field stays shown while it holds a command, past the three.
+  const again = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
+  expect(await again.find({ key: 'command-key-4' })).toBeDefined()
+  await again.unmount()
 
   await pick($, 'command-bar', 'hidden')
   expect(await band.find({ type: 'Button' })).toBeUndefined()

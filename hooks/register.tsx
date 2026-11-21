@@ -56,6 +56,8 @@ const weekStart = atom({ plugin: 'session-kanban', key: 'weekStart' } as const, 
 const commandKeys = atom({ plugin: 'session-kanban', key: 'commandKeys' } as const, [] as string[])
 const isCommandBarShown = atom({ plugin: 'session-kanban', key: 'isCommandBarShown' } as const, false)
 const commandDraft = atom({ plugin: 'session-kanban', key: 'commandDraft' } as const, null as string[] | null)
+// How many command fields Settings shows, at least past the last filled one.
+const commandFieldCount = atom({ plugin: 'session-kanban', key: 'commandFieldCount' } as const, 3)
 const loadCount = atom({ plugin: 'session-kanban', key: 'loadCount' } as const, String(DEFAULT_COUNT))
 const titleMode = atom({ plugin: 'session-kanban', key: 'titleMode' } as const, 'ellipsis' as TitleMode)
 const cornerStyle = atom({ plugin: 'session-kanban', key: 'cornerStyle' } as const, 'square' as CornerStyle)
@@ -680,15 +682,17 @@ function commandKeyName(text: string) {
   return text.length > 18 ? `${text.slice(0, 17)}…` : text
 }
 
-// Runs a button's command as if typed: `/name args` as that slash command,
-// anything else as a prompt. Both wait for the session to be idle.
+// Runs a button's command: `/name args` as that slash command, once the
+// session is idle. Anything else goes into the prompt box for the person to
+// send, since a prompt a mod submits reaches the model as the mod's, not
+// theirs, and asks for push or delete are then refused.
 async function runCommandKey($: EngineInterface, text: string) {
   const slash = /^\/(\S+)\s*([\s\S]*)$/.exec(text)
   try {
     if (slash?.[1]) {
       await $.command.run({ command: slash[1], args: slash[2] ?? '' })
-    } else {
-      await $.prompt.submit({ text })
+    } else if (!(await $.prompt.fill({ text })).isFilled) {
+      $.ui.toast('Close the open dialog first: the prompt box cannot take the text now.')
     }
   } catch (error) {
     $.ui.toast(`Could not run ${text}: ${error instanceof Error ? error.message : String(error)}`)
@@ -788,9 +792,20 @@ async function settingsSections($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       },
     ]
   }
-  const { Select, Input } = $.ui.resolve(e)
+  const { Select, Input, Button } = $.ui.resolve(e)
+  const lastFilled = keys.reduce((last, text, index) => (text.trim() === '' ? last : index + 1), 0)
+  const fieldCount = Math.min(COMMAND_KEY_COUNT, Math.max(await read($, commandFieldCount), lastFilled))
+  const addField =
+    barShown && fieldCount < COMMAND_KEY_COUNT ? (
+      <Button
+        key="command-add"
+        label="+ Add command"
+        dimColor
+        onPress={() => update($, commandFieldCount, () => fieldCount + 1)}
+      />
+    ) : null
   const keyFields = barShown
-    ? Array.from({ length: COMMAND_KEY_COUNT }, (_, index) => (
+    ? Array.from({ length: fieldCount }, (_, index) => (
         <Input
           key={`command-key-${index + 1}`}
           placeholder="/plugin:command or a prompt"
@@ -882,6 +897,7 @@ async function settingsSections($: EngineInterface, e: ResolveInput<'Pane'>): Pr
       onSelect={value => update($, isCommandBarShown, () => value === 'shown').then(save($, isCommandBarShown))}
     />,
     ...keyFields,
+    ...(addField ? [addField] : []),
   ]
   const placeControls = [
     // The way back: settings in the board's row, as before they had a pane.

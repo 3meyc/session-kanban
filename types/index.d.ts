@@ -69,6 +69,7 @@ declare module 'claude-code' {
       commandKeys: string[]
       // Commands typed in Settings and not yet applied; null when none are.
       commandDraft: string[] | null
+      commandFieldCount: number
       isCommandBarShown: boolean
       titleMode: TitleMode
       cornerStyle: CornerStyle
