@@ -681,7 +681,7 @@ test('command buttons run their slash command, or put their prompt in the box to
     filled.push(e.text)
     return { isFilled: true }
   })
-  const { clock } = engine(on, JSON.stringify(SESSIONS))
+  const { clock, opens } = engine(on, JSON.stringify(SESSIONS))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -722,7 +722,10 @@ test('command buttons run their slash command, or put their prompt in the box to
   expect(await band.find({ key: 'command-frame-4' })).toBeUndefined()
   // Commands sit at the leading edge, prompts at the trailing one.
   expect((await band.find({ key: 'band-commands' }))?.text).toBe('close-out')
-  expect((await band.find({ key: 'band-prompts' }))?.text).toBe('Summarize the diff')
+  expect((await band.find({ key: 'band-prompts' }))?.text).toContain('Summarize the diff')
+  // The board's own toggle closes the prompts' side, framed green.
+  expect((await band.find({ key: 'board-toggle' }))?.text).toBe('K')
+  expect((await band.find({ key: 'board-toggle-frame' }))?.props.borderColor).toBe('success')
   await band.press({ key: 'command-key-1' })
   await band.press({ key: 'command-key-4' })
   await clock.advance(1)
@@ -734,6 +737,13 @@ test('command buttons run their slash command, or put their prompt in the box to
   const again = await $.ui.mount({ ...SETTINGS, surface: 'desktop' })
   expect(await again.find({ key: 'command-key-4' })).toBeDefined()
   await again.unmount()
+
+  // K opens the board, which a /kanban run through $.command.run could not:
+  // the engine skips the calling plugin's own command hook.
+  const opensBefore = opens.length
+  await band.press({ key: 'board-toggle' })
+  await clock.advance(1)
+  expect(opens.slice(opensBefore)).toEqual(['session-kanban'])
 
   await pick($, 'command-bar', 'hidden')
   expect(await band.find({ type: 'Button' })).toBeUndefined()

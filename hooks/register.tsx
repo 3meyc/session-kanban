@@ -682,6 +682,21 @@ function commandKeyName(text: string) {
   return text.length > 18 ? `${text.slice(0, 17)}…` : text
 }
 
+// /kanban's toggle, since the app has no toolbar a mod can add a button to. A
+// board behind another tab is brought forward rather than closed.
+async function toggleBoard($: EngineInterface) {
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === PANE && pane.isShown)) {
+    await $.ui.close({ id: PANE })
+    return 'Sessions board closed.'
+  }
+  await $.ui.open({ id: PANE, title: TITLE })
+  startPolling($)
+  later($, () => refresh($))
+
+  return 'Sessions board opened.'
+}
+
 // Runs a button's command: `/name args` as that slash command, once the
 // session is idle. Anything else goes into the prompt box for the person to
 // send, since a prompt a mod submits reaches the model as the mod's, not
@@ -689,7 +704,11 @@ function commandKeyName(text: string) {
 async function runCommandKey($: EngineInterface, text: string) {
   const slash = /^\/(\S+)\s*([\s\S]*)$/.exec(text)
   try {
-    if (slash?.[1]) {
+    // $.command.run skips the calling plugin's own hooks, so the board's own
+    // command would find no one to answer it; it is toggled here instead.
+    if (slash?.[1] === 'kanban') {
+      await toggleBoard($)
+    } else if (slash?.[1]) {
       await $.command.run({ command: slash[1], args: slash[2] ?? '' })
     } else if (!(await $.prompt.fill({ text })).isFilled) {
       $.ui.toast('Close the open dialog first: the prompt box cannot take the text now.')
@@ -977,20 +996,7 @@ export const register: Register = on => {
     return started
   })
 
-  // A toggle, since the app has no toolbar a mod can add a button to. A board
-  // behind another tab is brought forward rather than closed.
-  on('command.run', { command: 'kanban' }, async $ => {
-    const panes = await $.ui.panes().catch(() => [])
-    if (panes.some(pane => pane.id === PANE && pane.isShown)) {
-      await $.ui.close({ id: PANE })
-      return { text: 'Sessions board closed.' }
-    }
-    await $.ui.open({ id: PANE, title: TITLE })
-    startPolling($)
-    later($, () => refresh($))
-
-    return { text: 'Sessions board opened.' }
-  })
+  on('command.run', { command: 'kanban' }, async $ => ({ text: await toggleBoard($) }))
 
   on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -1052,29 +1058,34 @@ export const register: Register = on => {
     )
     const commands = buttonsWhere(true)
     const prompts = buttonsWhere(false)
-
-    if (commands.length === 0 && prompts.length === 0) {
-      return (
-        <Box flexDirection="row" gap="xs" alignItems="center">
-          <Text dimColor>No commands yet.</Text>
-          <Button
-            key="command-keys-setup"
-            label="Set up"
-            onPress={() => $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })}
-          />
-        </Box>
-      )
-    }
+    // The board's own toggle, always last, in a green frame like the commands' blue.
+    const boardToggle = (
+      <Box key="board-toggle-frame" borderStyle="round" borderColor="success" backgroundColor="#22c55e33" padding={0} overflow="hidden">
+        <Button key="board-toggle" label="K" onPress={() => later($, () => toggleBoard($))} />
+      </Box>
+    )
+    const leading =
+      commands.length > 0 || prompts.length > 0
+        ? commands
+        : [
+            <Text dimColor>No commands yet.</Text>,
+            <Button
+              key="command-keys-setup"
+              label="Set up"
+              onPress={() => $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })}
+            />,
+          ]
 
     // Commands at the leading edge, prompts at the trailing one, each group in
     // its own Box so the desktop keeps that order whatever the list's order.
     return (
       <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm">
         <Box key="band-commands" flexDirection="row" gap="xs" alignItems="center">
-          {commands}
+          {leading}
         </Box>
         <Box key="band-prompts" flexDirection="row" gap="xs" alignItems="center">
           {prompts}
+          {boardToggle}
         </Box>
       </Box>
     )
