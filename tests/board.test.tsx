@@ -419,6 +419,23 @@ test('/kanban closes a shown board and opens a hidden one', async ($, on) => {
   expect(closed).toEqual(['session-kanban'])
 })
 
+test('/kanban closes the board settings with the board, even when they are the tab shown', async ($, on) => {
+  const closed: string[] = []
+  on('ui.panes', () => ({
+    value: [
+      { id: 'session-kanban', title: 'Sessions board', isShown: false, isFocused: false, isPlaced: true },
+      { id: 'session-kanban-settings', title: 'Board settings', isShown: true, isFocused: true, isPlaced: true },
+    ],
+  }))
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
+  engine(on, JSON.stringify(SESSIONS))
+  expect((await $.command.run(RUN_KANBAN))?.text).toBe('Sessions board closed.')
+  expect(closed).toEqual(['session-kanban', 'session-kanban-settings'])
+})
+
 test('archived sessions behind many archived sub-sessions still reach the Archived column', async ($, on) => {
   const parent = { sessionId: 'local_p', title: 'Busy parent', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:59:00Z', group: null, link: 'claude://x/local_p' }
   const subs = Array.from({ length: 30 }, (_, i) => ({

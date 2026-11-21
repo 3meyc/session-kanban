@@ -683,11 +683,13 @@ function commandKeyName(text: string) {
 }
 
 // /kanban's toggle, since the app has no toolbar a mod can add a button to. A
-// board behind another tab is brought forward rather than closed.
+// board behind another tab is brought forward rather than closed. Its settings
+// pane counts as the board: shown, it closes with it, being no use alone.
 async function toggleBoard($: EngineInterface) {
   const panes = await $.ui.panes().catch(() => [])
-  if (panes.some(pane => pane.id === PANE && pane.isShown)) {
+  if (panes.some(pane => (pane.id === PANE || pane.id === SETTINGS_PANE) && pane.isShown)) {
     await $.ui.close({ id: PANE })
+    if (panes.some(pane => pane.id === SETTINGS_PANE)) await $.ui.close({ id: SETTINGS_PANE })
     return 'Sessions board closed.'
   }
   await $.ui.open({ id: PANE, title: TITLE })

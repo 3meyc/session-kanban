@@ -51,7 +51,7 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 
 ## Use
 
-The pane opens when a root session starts; a sub-session (one Claude started from another, or a fork) leaves it closed and does not refresh it until you open it. `/kanban` toggles it: it closes the board when it is showing, and opens it (or brings it forward from behind another tab) otherwise.
+The pane opens when a root session starts; a sub-session (one Claude started from another, or a fork) leaves it closed and does not refresh it until you open it. `/kanban` toggles it: it closes the board when it or its settings pane is showing, closing the settings pane along with it, and opens it (or brings it forward from behind another tab) otherwise.
 
 ```
 /kanban
