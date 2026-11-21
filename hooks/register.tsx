@@ -1019,15 +1019,24 @@ export const register: Register = on => {
       text.trim() === ''
         ? []
         : [
-            // A Button takes no colour of its own; a coloured Text child marks the
-            // ones that run a command, apart from those that only fill the box.
-            <Button key={`command-key-${index + 1}`} onPress={() => later($, () => runCommandKey($, text.trim()))}>
-              {text.trim().startsWith('/') ? (
-                <Text color="suggestion">{commandKeyName(text.trim())}</Text>
-              ) : (
-                commandKeyName(text.trim())
-              )}
-            </Button>,
+            // The desktop draws a native Button that ignores a coloured label, so
+            // a button that runs a command sits in a blue-framed, blue-tinted Box,
+            // apart from those that only fill the prompt box.
+            text.trim().startsWith('/') ? (
+              <Box key={`command-frame-${index + 1}`} borderStyle="round" borderColor="suggestion" backgroundColor="#3b82f633">
+                <Button
+                  key={`command-key-${index + 1}`}
+                  label={commandKeyName(text.trim())}
+                  onPress={() => later($, () => runCommandKey($, text.trim()))}
+                />
+              </Box>
+            ) : (
+              <Button
+                key={`command-key-${index + 1}`}
+                label={commandKeyName(text.trim())}
+                onPress={() => later($, () => runCommandKey($, text.trim()))}
+              />
+            ),
           ],
     )
 

@@ -717,8 +717,9 @@ test('command buttons run their slash command, or put their prompt in the box to
   expect((await band.find({ key: 'command-key-1' }))?.text).toBe('close-out')
   expect(await band.find({ key: 'command-key-2' })).toBeUndefined()
   expect((await band.find({ key: 'command-key-4' }))?.text).toBe('Summarize the diff')
-  // Commands are drawn blue; a prompt keeps the plain label.
-  expect((await band.findAll({ type: 'Text' })).map(text => [text.text, text.props.color])).toEqual([['close-out', 'suggestion']])
+  // A command's button sits in a blue frame; a prompt's stands plain.
+  expect((await band.find({ key: 'command-frame-1' }))?.props.borderColor).toBe('suggestion')
+  expect(await band.find({ key: 'command-frame-4' })).toBeUndefined()
   await band.press({ key: 'command-key-1' })
   await band.press({ key: 'command-key-4' })
   await clock.advance(1)
