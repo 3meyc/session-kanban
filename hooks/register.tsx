@@ -1255,12 +1255,19 @@ export const register: Register = on => {
     // What a session's last turn left for the person, while it is not running again.
     const waitingFor = (card: Card) => (card.isRunning || card.isArchived ? undefined : waitingOf[card.id])
     // Orange when the session is blocked on you, blue when it is done and ready for review.
-    const waitingDot = (card: Card) => {
+    // On a card it sits between # and the title Button, so it takes the Button's
+    // top inset to line up with the label, and a little room after #.
+    const waitingDot = (card: Card, isOnCard = false) => {
       const waiting = waitingFor(card)
       if (!waiting) return null
 
       return (
-        <Box key={`needs-${card.id}`} flexShrink={0}>
+        <Box
+          key={`needs-${card.id}`}
+          flexShrink={0}
+          paddingTop={isOnCard ? BUTTON_INSET : undefined}
+          paddingLeft={isOnCard ? BUTTON_INSET : undefined}
+        >
           <Text color={waiting.category === 'blocked' ? 'warning' : 'suggestion'}>●</Text>
         </Box>
       )
@@ -1382,11 +1389,11 @@ export const register: Register = on => {
             backgroundColor={isPainted && sub.isCurrent ? currentFill(column) : undefined}
           >
             <Text color={color}>{marker}</Text>
+            {waitingDot(sub)}
             {/* The spacer before the arrow lines every level's arrows up at the card's right edge. */}
             <Box flexDirection="column" flexShrink={1} minWidth={0}>
               {titleOf(sub, sub.isArchived)}
             </Box>
-            {waitingDot(sub)}
             <Box flexGrow={1} />
             {openIcon(sub)}
           </Box>
@@ -1487,11 +1494,11 @@ export const register: Register = on => {
             {/* No gap inside: the title Button's own inset already spaces it from #. */}
             <Box flexDirection="row" alignItems="flex-start" flexShrink={1} minWidth={0}>
               {action(`copy-${card.id}`, '#', () => copyId($, card))}
+              {waitingDot(card, true)}
               <Box flexDirection="column" flexShrink={1} minWidth={0}>
                 {titleOf(card)}
               </Box>
             </Box>
-            {waitingDot(card)}
             {openIcon(card)}
             <Box flexGrow={1} />
             {tag && (
