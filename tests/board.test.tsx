@@ -624,7 +624,7 @@ test('a session waiting on you has a dot by its title, and the toolbar counts th
   await ui.unmount()
 })
 
-test("a parent card lines up its sub-sessions' lifespans under its timeline", async ($, on) => {
+test("a parent card's timeline shows its own activity only, its sub-sessions listed below it", async ($, on) => {
   const withSub = [
     ...SESSIONS,
     { sessionId: 'local_f', title: 'Logging <docs>', startedBy: 'local_a', isRunning: false, isArchived: false, lastActivityAt: '2026-11-03T11:30:00Z', group: { id: 'g1', name: 'Local tools' }, link: 'claude://x/local_f' },
@@ -636,12 +636,9 @@ test("a parent card lines up its sub-sessions' lifespans under its timeline", as
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const chart = (await ui.findAll({ type: 'Svg' })).find(found => String(found.props.alt).startsWith('Activity over'))
-  expect(chart?.props.alt).toBe('Activity over the last 7 days: busy in 1 of 56 three-hour spans; 1 sub-session on the same days')
-  // The archived sub-session stays out until the card shows archived ones.
-  const source = String(chart?.props.source)
-  expect(source.match(/height="3"/g)).toHaveLength(1)
-  expect(source).toContain('y="19"')
-  expect(chart?.props.height).toBe(22)
+  expect(chart?.props.alt).toBe('Activity over the last 7 days: busy in 1 of 56 three-hour spans')
+  expect(chart?.props.height).toBe(16)
+  expect(await ui.find({ key: 'local_f' })).toBeDefined()
   // A sub-session line says when it is the one waiting.
   expect(await ui.find({ key: 'needs-local_f' })).toBeDefined()
   await ui.unmount()

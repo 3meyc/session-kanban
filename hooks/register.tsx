@@ -325,29 +325,20 @@ function measureOf(counts: HourCounts, metric: ActivityMetric): number {
   return metric === 'tokens' ? counts[1] : counts[0]
 }
 
-// A sub-session's span on its parent's timeline, from its start to its last
-// activity, or to now while it runs.
-type Lifespan = { start: number; end: number; color: string }
+// The smallest bar drawn, so a quiet span reads as a bar, not as a dash on the baseline.
+const MIN_BAR_HEIGHT = 4
 
-const LIFESPAN_HEIGHT = 3
-const LIFESPAN_GAP = 2
-// More rows than this would outgrow the card; the most recent are kept.
-const LIFESPANS_SHOWN = 12
-const RUNNING_COLOR = '#22c55e'
-const ARCHIVED_COLOR = '#9ca3af'
-
-// One card's drawing on one time axis, the last week: a bar per three hours,
-// as tall as its share of the card's busiest bar, then a row per sub-session's
-// lifespan, with a tick at each local midnight across both. Null when there is
+// One card's drawing of the last week: a bar per three hours, as tall as its
+// share of the card's busiest bar, with a tick at each local midnight. Its
+// sub-sessions are listed under it rather than drawn on it. Null when there is
 // nothing to draw.
 function cardSvg(input: {
   hours: Record<string, HourCounts> | undefined
   metric: ActivityMetric
-  lifespans: Lifespan[]
   now: number
   color: string
 }): { source: string; alt: string; height: number } | null {
-  const { metric, lifespans, now, color } = input
+  const { metric, now, color } = input
   const start = now - WEEK_MS
   const bins = Array.from({ length: ACTIVITY_BINS }, (): HourCounts => [0, 0, 0])
   for (const [hour, counts] of Object.entries(input.hours ?? {})) {
@@ -356,28 +347,18 @@ function cardSvg(input: {
     if (bin) bins[index] = [bin[0] + counts[0], bin[1] + counts[1], bin[2] + counts[2]]
   }
   const peak = Math.max(...bins.map(bin => measureOf(bin, metric)))
-  const shown = lifespans.filter(span => span.end >= start).slice(0, LIFESPANS_SHOWN)
-  if (peak === 0 && shown.length === 0) return null
+  if (peak === 0) return null
   const width = ACTIVITY_BINS * ACTIVITY_BAR_WIDTH
   const toX = (at: number) => Math.max(0, ((at - start) / ACTIVITY_BIN_MS) * ACTIVITY_BAR_WIDTH)
-  const timelineHeight = peak > 0 ? ACTIVITY_HEIGHT : 0
-  const spansTop = timelineHeight > 0 ? timelineHeight + LIFESPAN_GAP + 1 : 0
-  const height = shown.length > 0 ? spansTop + shown.length * (LIFESPAN_HEIGHT + LIFESPAN_GAP) - LIFESPAN_GAP : timelineHeight
+  const height = ACTIVITY_HEIGHT
 
   let busySpans = 0
   const bars = bins.flatMap((bin, index) => {
     const value = measureOf(bin, metric)
-    if (value === 0 || peak === 0) return []
+    if (value === 0) return []
     busySpans++
-    const barHeight = Math.max(2, Math.round((value / peak) * (ACTIVITY_HEIGHT - 2)))
+    const barHeight = Math.max(MIN_BAR_HEIGHT, Math.round((value / peak) * (ACTIVITY_HEIGHT - 2)))
     return [`<rect x="${index * ACTIVITY_BAR_WIDTH}" y="${ACTIVITY_HEIGHT - barHeight}" width="${ACTIVITY_BAR_WIDTH - 1}" height="${barHeight}"/>`]
-  })
-  const rows = shown.map((span, index) => {
-    const y = spansTop + index * (LIFESPAN_HEIGHT + LIFESPAN_GAP)
-    const x = toX(span.start)
-    const spanWidth = Math.max(2, toX(span.end) - x)
-
-    return `<rect x="${x.toFixed(1)}" y="${y}" width="${spanWidth.toFixed(1)}" height="${LIFESPAN_HEIGHT}" fill="${span.color}"/>`
   })
   const ticks: string[] = []
   const midnight = new Date(start)
@@ -386,18 +367,12 @@ function cardSvg(input: {
     const x = toX(at).toFixed(1)
     ticks.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}"/>`)
   }
-  const baseline = timelineHeight > 0 ? `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>` : ''
+  const baseline = `<rect y="${ACTIVITY_HEIGHT - 1}" width="${width}" height="1" fill="${color}" opacity="0.25"/>`
   const source =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${STRETCH_WIDTH}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">` +
     `${baseline}<g stroke="${color}" stroke-width="1" opacity="0.35">${ticks.join('')}</g>` +
-    `<g fill="${color}">${bars.join('')}</g>${rows.join('')}</svg>`
-  const measured = metric === 'tokens' ? 'tokens' : 'activity'
-  const alt = [
-    peak > 0 ? `${measured === 'tokens' ? 'Tokens' : 'Activity'} over the last 7 days: busy in ${busySpans} of ${ACTIVITY_BINS} three-hour spans` : '',
-    shown.length > 0 ? `${shown.length} sub-session${shown.length === 1 ? '' : 's'} on the same days` : '',
-  ]
-    .filter(Boolean)
-    .join('; ')
+    `<g fill="${color}">${bars.join('')}</g></svg>`
+  const alt = `${metric === 'tokens' ? 'Tokens' : 'Activity'} over the last 7 days: busy in ${busySpans} of ${ACTIVITY_BINS} three-hour spans`
 
   return { source, alt, height }
 }
@@ -1269,15 +1244,9 @@ export const register: Register = on => {
     }
 
     // The terminal has no Svg; its board goes without timelines.
-    const timelineOf = (card: Card, column: Column, subs: Card[]) => {
+    const timelineOf = (card: Card, column: Column) => {
       if (metric === 'hidden' || e.surface === 'terminal') return null
-      const lifespans = subs.flatMap((sub): Lifespan[] => {
-        const createdAt = known[sub.id]?.createdAt
-        if (createdAt === undefined) return []
-        const color = sub.isArchived ? ARCHIVED_COLOR : sub.isRunning ? RUNNING_COLOR : column.tint.slice(0, 7)
-        return [{ start: createdAt, end: sub.isRunning ? now : sub.lastActivityAt, color }]
-      })
-      const drawing = cardSvg({ hours: activityOf[card.id], metric, lifespans, now, color: column.tint.slice(0, 7) })
+      const drawing = cardSvg({ hours: activityOf[card.id], metric, now, color: column.tint.slice(0, 7) })
       if (!drawing) return null
       const { Svg } = $.ui.resolve(e)
 
@@ -1509,7 +1478,7 @@ export const register: Register = on => {
               {age(now - card.lastActivityAt)} ago{card.branch ? ` · ${card.branch}` : ''}
             </Text>
           </Box>
-          {timelineOf(card, column, showsArchived ? subs : subs.filter(sub => !sub.isArchived))}
+          {timelineOf(card, column)}
           {subs.length > 0 && (
             <Box flexDirection="column" marginTop="xs" paddingLeft={inset}>
               <Text dimColor size="caption">
