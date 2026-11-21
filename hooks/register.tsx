@@ -1023,7 +1023,17 @@ export const register: Register = on => {
             // a button that runs a command sits in a blue-framed, blue-tinted Box,
             // apart from those that only fill the prompt box.
             text.trim().startsWith('/') ? (
-              <Box key={`command-frame-${index + 1}`} borderStyle="round" borderColor="suggestion" backgroundColor="#3b82f633">
+              // No padding: the desktop pads a bordered Box by default, which
+              // doubled the button's size. Hidden overflow clips the native
+              // button's own backdrop, which showed as a second outline.
+              <Box
+                key={`command-frame-${index + 1}`}
+                borderStyle="round"
+                borderColor="suggestion"
+                backgroundColor="#3b82f633"
+                padding={0}
+                overflow="hidden"
+              >
                 <Button
                   key={`command-key-${index + 1}`}
                   label={commandKeyName(text.trim())}
