@@ -659,6 +659,8 @@ test('Settings opens a pane of its own, and can go back to the board row', async
   await clock.advance(1)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Settings shares the top row with the search box.
+  expect((await ui.find({ key: 'search-row' }))?.text).toBe('Settings')
   await ui.press({ key: 'settings' })
   expect(opened.at(-1)).toBe('session-kanban-settings')
   // The board keeps no settings row while they have a pane.

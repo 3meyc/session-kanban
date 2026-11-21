@@ -1629,9 +1629,22 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap="sm">
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm">
-          <Box flexDirection="row" gap="sm" alignItems="center" flexWrap="wrap" flexShrink={1}>
+        {/* Search and Settings share the top row, a clear gap apart; the
+            filters wrap beneath them. A word, not a glyph: a Button draws its
+            text at one fixed size. */}
+        <Box key="search-row" flexDirection="row" justifyContent="space-between" alignItems="center" gap="lg">
+          <Box flexDirection="row" alignItems="center" flexGrow={1} flexShrink={1}>
             {searchControl}
+          </Box>
+          <Button
+            key="settings"
+            label="Settings"
+            variant={settingsRow ? 'primary' : 'secondary'}
+            onPress={() => toggleSettings($)}
+          />
+        </Box>
+        <Box flexDirection="row" alignItems="center">
+          <Box flexDirection="row" gap="sm" alignItems="center" flexWrap="wrap" flexShrink={1}>
             {filterControl}
             {countControl}
             <Button
@@ -1649,13 +1662,6 @@ export const register: Register = on => {
             <Button key="refresh" label="Refresh" onPress={() => later($, () => refresh($))} />
             {statusNote}
           </Box>
-          {/* A word, not a glyph: a Button draws its text at one fixed size. */}
-          <Button
-            key="settings"
-            label="Settings"
-            variant={settingsRow ? 'primary' : 'secondary'}
-            onPress={() => toggleSettings($)}
-          />
         </Box>
         {settingsRow && (
           <Box flexDirection="column" gap="sm">
