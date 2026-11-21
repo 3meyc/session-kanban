@@ -1255,19 +1255,14 @@ export const register: Register = on => {
     // What a session's last turn left for the person, while it is not running again.
     const waitingFor = (card: Card) => (card.isRunning || card.isArchived ? undefined : waitingOf[card.id])
     // Orange when the session is blocked on you, blue when it is done and ready for review.
-    // On a card it sits between # and the title Button, so it takes the Button's
-    // top inset to line up with the label, and a little room after #.
+    // On a card it sits between # and the title Button, a little room after #;
+    // with no top inset it lines up with the label, as it did after the title.
     const waitingDot = (card: Card, isOnCard = false) => {
       const waiting = waitingFor(card)
       if (!waiting) return null
 
       return (
-        <Box
-          key={`needs-${card.id}`}
-          flexShrink={0}
-          paddingTop={isOnCard ? BUTTON_INSET : undefined}
-          paddingLeft={isOnCard ? BUTTON_INSET : undefined}
-        >
+        <Box key={`needs-${card.id}`} flexShrink={0} paddingLeft={isOnCard ? BUTTON_INSET : undefined}>
           <Text color={waiting.category === 'blocked' ? 'warning' : 'suggestion'}>●</Text>
         </Box>
       )
