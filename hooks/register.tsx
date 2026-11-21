@@ -1015,14 +1015,15 @@ export const register: Register = on => {
     if (e.props.hasSurvey || !(await read($, isCommandBarShown))) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const keys = (await read($, commandKeys)).slice(0, COMMAND_KEY_COUNT)
-    const buttons = keys.flatMap((text, index) =>
-      text.trim() === ''
+    const isCommand = (text: string) => text.trim().startsWith('/')
+    const buttonsWhere = (wanted: boolean) => keys.flatMap((text, index) =>
+      text.trim() === '' || isCommand(text) !== wanted
         ? []
         : [
             // The desktop draws a native Button that ignores a coloured label, so
             // a button that runs a command sits in a blue-framed, blue-tinted Box,
             // apart from those that only fill the prompt box.
-            text.trim().startsWith('/') ? (
+            wanted ? (
               // No padding: the desktop pads a bordered Box by default, which
               // doubled the button's size. Hidden overflow clips the native
               // button's own backdrop, which showed as a second outline.
@@ -1049,17 +1050,32 @@ export const register: Register = on => {
             ),
           ],
     )
+    const commands = buttonsWhere(true)
+    const prompts = buttonsWhere(false)
 
-    return (
-      <Box flexDirection="row" gap="xs" alignItems="center">
-        {buttons.length > 0 ? buttons : <Text dimColor>No commands yet.</Text>}
-        {buttons.length === 0 && (
+    if (commands.length === 0 && prompts.length === 0) {
+      return (
+        <Box flexDirection="row" gap="xs" alignItems="center">
+          <Text dimColor>No commands yet.</Text>
           <Button
             key="command-keys-setup"
             label="Set up"
             onPress={() => $.ui.open({ id: SETTINGS_PANE, title: SETTINGS_TITLE, closeOnEscape: true })}
           />
-        )}
+        </Box>
+      )
+    }
+
+    // Commands at the leading edge, prompts at the trailing one, each group in
+    // its own Box so the desktop keeps that order whatever the list's order.
+    return (
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap="sm">
+        <Box key="band-commands" flexDirection="row" gap="xs" alignItems="center">
+          {commands}
+        </Box>
+        <Box key="band-prompts" flexDirection="row" gap="xs" alignItems="center">
+          {prompts}
+        </Box>
       </Box>
     )
   })

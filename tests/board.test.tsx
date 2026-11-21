@@ -720,6 +720,9 @@ test('command buttons run their slash command, or put their prompt in the box to
   // A command's button sits in a blue frame; a prompt's stands plain.
   expect((await band.find({ key: 'command-frame-1' }))?.props.borderColor).toBe('suggestion')
   expect(await band.find({ key: 'command-frame-4' })).toBeUndefined()
+  // Commands sit at the leading edge, prompts at the trailing one.
+  expect((await band.find({ key: 'band-commands' }))?.text).toBe('close-out')
+  expect((await band.find({ key: 'band-prompts' }))?.text).toBe('Summarize the diff')
   await band.press({ key: 'command-key-1' })
   await band.press({ key: 'command-key-4' })
   await clock.advance(1)
