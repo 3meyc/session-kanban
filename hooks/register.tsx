@@ -1019,11 +1019,15 @@ export const register: Register = on => {
       text.trim() === ''
         ? []
         : [
-            <Button
-              key={`command-key-${index + 1}`}
-              label={commandKeyName(text.trim())}
-              onPress={() => later($, () => runCommandKey($, text.trim()))}
-            />,
+            // A Button takes no colour of its own; a coloured Text child marks the
+            // ones that run a command, apart from those that only fill the box.
+            <Button key={`command-key-${index + 1}`} onPress={() => later($, () => runCommandKey($, text.trim()))}>
+              {text.trim().startsWith('/') ? (
+                <Text color="suggestion">{commandKeyName(text.trim())}</Text>
+              ) : (
+                commandKeyName(text.trim())
+              )}
+            </Button>,
           ],
     )
 
